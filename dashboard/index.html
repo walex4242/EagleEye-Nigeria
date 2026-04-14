@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EagleEye-Nigeria — Thermal Hotspot Dashboard</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: 'Segoe UI', sans-serif;
+        background: #0d1117;
+        color: #e6edf3;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ── Header ── */
+      header {
+        background: #161b22;
+        border-bottom: 1px solid #30363d;
+        padding: 12px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+      }
+
+      .header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .logo {
+        font-size: 22px;
+      }
+
+      .header-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #e6edf3;
+      }
+
+      .header-sub {
+        font-size: 11px;
+        color: #8b949e;
+        margin-top: 1px;
+      }
+
+      .status-pill {
+        font-size: 11px;
+        padding: 4px 10px;
+        border-radius: 99px;
+        background: #1f3a1f;
+        color: #3fb950;
+        border: 1px solid #238636;
+      }
+
+      /* ── Stats bar ── */
+      .stats-bar {
+        background: #161b22;
+        border-bottom: 1px solid #30363d;
+        padding: 10px 20px;
+        display: flex;
+        gap: 24px;
+        flex-shrink: 0;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .stat {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .stat-label {
+        font-size: 10px;
+        color: #8b949e;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .stat-value {
+        font-size: 18px;
+        font-weight: 600;
+        color: #e6edf3;
+      }
+
+      .stat-value.high {
+        color: #f85149;
+      }
+      .stat-value.medium {
+        color: #d29922;
+      }
+      .stat-value.low {
+        color: #3fb950;
+      }
+
+      .divider {
+        width: 1px;
+        height: 32px;
+        background: #30363d;
+      }
+
+      /* ── Controls ── */
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-left: auto;
+      }
+
+      .controls label {
+        font-size: 12px;
+        color: #8b949e;
+      }
+
+      .controls select {
+        background: #21262d;
+        color: #e6edf3;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .refresh-btn {
+        background: #21262d;
+        color: #e6edf3;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 5px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+
+      .refresh-btn:hover {
+        background: #30363d;
+      }
+
+      /* ── Map ── */
+      #map {
+        flex: 1;
+        width: 100%;
+      }
+
+      /* ── Legend ── */
+      .legend {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 12px;
+        color: #e6edf3;
+        min-width: 150px;
+      }
+
+      .legend-title {
+        font-weight: 600;
+        margin-bottom: 8px;
+        color: #8b949e;
+        text-transform: uppercase;
+        font-size: 10px;
+        letter-spacing: 0.5px;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 5px;
+      }
+
+      .legend-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      /* ── Loading overlay ── */
+      #loading {
+        position: fixed;
+        inset: 0;
+        background: rgba(13, 17, 23, 0.85);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .spinner {
+        width: 36px;
+        height: 36px;
+        border: 3px solid #30363d;
+        border-top-color: #f85149;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      #loading p {
+        font-size: 14px;
+        color: #8b949e;
+      }
+
+      /* ── Source badge ── */
+      #source-note {
+        position: fixed;
+        bottom: 10px;
+        left: 10px;
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-size: 11px;
+        color: #8b949e;
+        z-index: 1000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading">
+      <div class="spinner"></div>
+      <p>Fetching satellite data...</p>
+    </div>
+
+    <header>
+      <div class="header-left">
+        <span class="logo">🦅</span>
+        <div>
+          <div class="header-title">EagleEye-Nigeria</div>
+          <div class="header-sub">Thermal Hotspot Intelligence — Phase 1</div>
+        </div>
+      </div>
+      <span class="status-pill" id="status-pill">● LIVE</span>
+    </header>
+
+    <div class="stats-bar">
+      <div class="stat">
+        <span class="stat-label">Total Hotspots</span>
+        <span class="stat-value" id="stat-total">—</span>
+      </div>
+      <div class="divider"></div>
+      <div class="stat">
+        <span class="stat-label">High Confidence</span>
+        <span class="stat-value high" id="stat-high">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Medium</span>
+        <span class="stat-value medium" id="stat-medium">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Low</span>
+        <span class="stat-value low" id="stat-low">—</span>
+      </div>
+      <div class="divider"></div>
+      <div class="stat">
+        <span class="stat-label">Last Updated</span>
+        <span class="stat-value" id="stat-updated" style="font-size: 13px"
+          >—</span
+        >
+      </div>
+
+      <div class="controls">
+        <label>Days:</label>
+        <select id="days-select">
+          <option value="1">Last 24h</option>
+          <option value="2">Last 2 days</option>
+          <option value="3">Last 3 days</option>
+          <option value="7">Last 7 days</option>
+        </select>
+        <button class="refresh-btn" onclick="loadHotspots()">↻ Refresh</button>
+      </div>
+    </div>
+
+    <div id="map"></div>
+    <div id="source-note">Source: NASA FIRMS · VIIRS SNPP NRT</div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+      // ── Map Init ──────────────────────────────────────────────
+      const map = L.map('map', { zoomControl: true }).setView([9.5, 8.0], 6);
+
+      L.tileLayer(
+        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        {
+          attribution: '© OpenStreetMap © CARTO',
+          maxZoom: 18,
+        },
+      ).addTo(map);
+
+      // ── Red Zone Overlays ─────────────────────────────────────
+      const redZones = [
+        {
+          name: 'Northwest Corridor',
+          bounds: [
+            [11.0, 4.0],
+            [14.0, 9.0],
+          ],
+        },
+        {
+          name: 'Northeast Corridor',
+          bounds: [
+            [10.0, 11.0],
+            [14.0, 15.0],
+          ],
+        },
+        {
+          name: 'North Central',
+          bounds: [
+            [8.0, 5.0],
+            [11.0, 10.0],
+          ],
+        },
+      ];
+
+      redZones.forEach((zone) => {
+        L.rectangle(zone.bounds, {
+          color: '#f85149',
+          weight: 1,
+          fillOpacity: 0.05,
+          dashArray: '4 4',
+        })
+          .addTo(map)
+          .bindTooltip(zone.name, { sticky: true });
+      });
+
+      // ── Legend ────────────────────────────────────────────────
+      const legend = L.control({ position: 'bottomright' });
+      legend.onAdd = () => {
+        const div = L.DomUtil.create('div', 'legend');
+        div.innerHTML = `
+      <div class="legend-title">Confidence</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f85149"></div> High</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#d29922"></div> Medium</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div> Low</div>
+      <div style="margin-top:8px" class="legend-title">Red Zones</div>
+      <div class="legend-item"><div style="width:12px;height:2px;border-top:1px dashed #f85149"></div> Monitored corridor</div>
+    `;
+        return div;
+      };
+      legend.addTo(map);
+
+      // ── Hotspot Layer ─────────────────────────────────────────
+      let hotspotLayer = L.layerGroup().addTo(map);
+
+      function confidenceColor(conf) {
+        if (conf === 'H') return '#f85149';
+        if (conf === 'N') return '#d29922';
+        return '#3fb950';
+      }
+
+      function confidenceLabel(conf) {
+        if (conf === 'H') return 'High';
+        if (conf === 'N') return 'Medium';
+        return 'Low';
+      }
+
+      async function loadHotspots() {
+        const days = document.getElementById('days-select').value;
+        document.getElementById('loading').style.display = 'flex';
+
+        try {
+          const [geoRes, sumRes] = await Promise.all([
+            fetch(`/api/v1/hotspots?days=${days}`),
+            fetch(`/api/v1/hotspots/summary?days=${days}`),
+          ]);
+
+          const geo = await geoRes.json();
+          const summary = await sumRes.json();
+
+          // Update stats
+          document.getElementById('stat-total').textContent =
+            summary.total ?? 0;
+          document.getElementById('stat-high').textContent =
+            summary.high_confidence ?? 0;
+          document.getElementById('stat-medium').textContent =
+            summary.medium_confidence ?? 0;
+          document.getElementById('stat-low').textContent =
+            summary.low_confidence ?? 0;
+          document.getElementById('stat-updated').textContent =
+            new Date().toLocaleTimeString();
+
+          // Update source note
+          const src = geo.metadata?.source || 'NASA FIRMS';
+          document.getElementById('source-note').textContent = `Source: ${src}`;
+
+          // Clear and redraw markers
+          hotspotLayer.clearLayers();
+
+          geo.features.forEach((f) => {
+            const [lon, lat] = f.geometry.coordinates;
+            const p = f.properties;
+            const color = confidenceColor(p.confidence);
+
+            const marker = L.circleMarker([lat, lon], {
+              radius: p.confidence === 'H' ? 9 : p.confidence === 'N' ? 7 : 5,
+              fillColor: color,
+              color: color,
+              weight: 1,
+              opacity: 0.9,
+              fillOpacity: 0.75,
+            });
+
+            marker.bindPopup(
+              `
+          <div style="font-family:'Segoe UI',sans-serif;min-width:180px">
+            <div style="font-weight:600;margin-bottom:6px;color:#e6edf3">
+              🔥 Thermal Detection
+            </div>
+            <table style="font-size:12px;width:100%;border-collapse:collapse">
+              <tr><td style="color:#8b949e;padding:2px 0">Confidence</td>
+                  <td style="color:${color};font-weight:600">${confidenceLabel(p.confidence)}</td></tr>
+              <tr><td style="color:#8b949e;padding:2px 0">Brightness</td>
+                  <td>${p.brightness} K</td></tr>
+              <tr><td style="color:#8b949e;padding:2px 0">FRP</td>
+                  <td>${p.frp} MW</td></tr>
+              <tr><td style="color:#8b949e;padding:2px 0">Date</td>
+                  <td>${p.acq_date} ${p.acq_time}</td></tr>
+              <tr><td style="color:#8b949e;padding:2px 0">Zone</td>
+                  <td>${p.red_zone}</td></tr>
+              <tr><td style="color:#8b949e;padding:2px 0">Coords</td>
+                  <td>${lat.toFixed(4)}, ${lon.toFixed(4)}</td></tr>
+            </table>
+          </div>
+        `,
+              { className: 'dark-popup' },
+            );
+
+            hotspotLayer.addLayer(marker);
+          });
+        } catch (err) {
+          console.error('Failed to load hotspots:', err);
+          document.getElementById('status-pill').textContent = '● ERROR';
+          document.getElementById('status-pill').style.background = '#3a1f1f';
+          document.getElementById('status-pill').style.color = '#f85149';
+        } finally {
+          document.getElementById('loading').style.display = 'none';
+        }
+      }
+
+      // Initial load
+      loadHotspots();
+
+      // Auto-refresh every 5 minutes
+      setInterval(loadHotspots, 5 * 60 * 1000);
+    </script>
+  </body>
+</html>
