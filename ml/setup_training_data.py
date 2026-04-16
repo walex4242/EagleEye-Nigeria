@@ -16,18 +16,28 @@ Creates:
 Run: python -m ml.setup_training_data
 """
 
+from __future__ import annotations
+
+import math
 import os
 import sys
 import json
 import random
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+PILLOW_AVAILABLE = False
 
 try:
     import numpy as np
     from PIL import Image, ImageDraw, ImageFilter
     PILLOW_AVAILABLE = True
 except ImportError:
-    PILLOW_AVAILABLE = False
+    pass
+
+if TYPE_CHECKING:
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
 
 DATA_DIR = Path(__file__).parent / "data"
 TRAIN_DIR = DATA_DIR / "train"
@@ -39,7 +49,7 @@ CLASSES = ["legal_activity", "suspicious_encampment"]
 PATCH_SIZE = 224
 
 
-def create_directory_structure():
+def create_directory_structure() -> None:
     """Create the required folder structure."""
     for split_dir in [TRAIN_DIR, VAL_DIR]:
         for cls in CLASSES:
@@ -47,7 +57,7 @@ def create_directory_structure():
             print(f"  ✓ Created: {split_dir / cls}")
 
 
-def generate_synthetic_legal(index: int, output_dir: Path):
+def generate_synthetic_legal(index: int, output_dir: Path) -> None:
     """
     Generate a synthetic 'legal_activity' image.
     Simulates farmland, villages, cleared fields with:
@@ -60,11 +70,11 @@ def generate_synthetic_legal(index: int, output_dir: Path):
 
     # Background: earth/vegetation tones
     bg_color = random.choice([
-        (34, 85, 34),    # Dark green (forest)
-        (85, 107, 47),   # Olive (farmland)
-        (139, 119, 101), # Brown (dry soil)
-        (107, 142, 35),  # Yellow-green (crops)
-        (160, 140, 100), # Sandy (cleared)
+        (34, 85, 34),     # Dark green (forest)
+        (85, 107, 47),    # Olive (farmland)
+        (139, 119, 101),  # Brown (dry soil)
+        (107, 142, 35),   # Yellow-green (crops)
+        (160, 140, 100),  # Sandy (cleared)
     ])
     draw.rectangle([0, 0, PATCH_SIZE, PATCH_SIZE], fill=bg_color)
 
@@ -73,21 +83,33 @@ def generate_synthetic_legal(index: int, output_dir: Path):
     for x in range(0, PATCH_SIZE, plot_size):
         for y in range(0, PATCH_SIZE, plot_size):
             # Slight color variation per plot
-            r = bg_color[0] + random.randint(-20, 20)
-            g = bg_color[1] + random.randint(-20, 20)
-            b = bg_color[2] + random.randint(-10, 10)
-            r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
-            draw.rectangle([x+1, y+1, x+plot_size-1, y+plot_size-1], fill=(r, g, b))
+            r = max(0, min(255, bg_color[0] + random.randint(-20, 20)))
+            g = max(0, min(255, bg_color[1] + random.randint(-20, 20)))
+            b = max(0, min(255, bg_color[2] + random.randint(-10, 10)))
+            draw.rectangle(
+                [x + 1, y + 1, x + plot_size - 1, y + plot_size - 1],
+                fill=(r, g, b),
+            )
 
     # Add roads (straight lines — organized infrastructure)
     num_roads = random.randint(1, 3)
     for _ in range(num_roads):
+        road_width = random.randint(2, 4)
+        road_color = (180, 160, 130)
         if random.random() > 0.5:
             y = random.randint(0, PATCH_SIZE)
-            draw.line([(0, y), (PATCH_SIZE, y)], fill=(180, 160, 130), width=random.randint(2, 4))
+            draw.line(
+                [(0, y), (PATCH_SIZE, y)],
+                fill=road_color,
+                width=road_width,
+            )
         else:
             x = random.randint(0, PATCH_SIZE)
-            draw.line([(x, 0), (x, PATCH_SIZE)], fill=(180, 160, 130), width=random.randint(2, 4))
+            draw.line(
+                [(x, 0), (x, PATCH_SIZE)],
+                fill=road_color,
+                width=road_width,
+            )
 
     # Add some buildings (regular rectangles — village)
     if random.random() > 0.5:
@@ -99,7 +121,10 @@ def generate_synthetic_legal(index: int, output_dir: Path):
             by = cluster_y + random.randint(-30, 30)
             bw = random.randint(6, 12)
             bh = random.randint(6, 12)
-            draw.rectangle([bx, by, bx+bw, by+bh], fill=(200, 190, 170))
+            draw.rectangle(
+                [bx, by, bx + bw, by + bh],
+                fill=(200, 190, 170),
+            )
 
     # Apply slight blur for realism
     img = img.filter(ImageFilter.GaussianBlur(radius=0.8))
@@ -113,7 +138,7 @@ def generate_synthetic_legal(index: int, output_dir: Path):
     img.save(output_dir / f"legal_{index:04d}.png")
 
 
-def generate_synthetic_suspicious(index: int, output_dir: Path):
+def generate_synthetic_suspicious(index: int, output_dir: Path) -> None:
     """
     Generate a synthetic 'suspicious_encampment' image.
     Simulates hidden camps with:
@@ -137,12 +162,14 @@ def generate_synthetic_suspicious(index: int, output_dir: Path):
     for _ in range(500):
         x = random.randint(0, PATCH_SIZE - 1)
         y = random.randint(0, PATCH_SIZE - 1)
-        r = bg_color[0] + random.randint(-15, 15)
-        g = bg_color[1] + random.randint(-15, 15)
-        b = bg_color[2] + random.randint(-10, 10)
-        r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
-        size = random.randint(2, 6)
-        draw.ellipse([x, y, x+size, y+size], fill=(r, g, b))
+        r = max(0, min(255, bg_color[0] + random.randint(-15, 15)))
+        g = max(0, min(255, bg_color[1] + random.randint(-15, 15)))
+        b = max(0, min(255, bg_color[2] + random.randint(-10, 10)))
+        dot_size = random.randint(2, 6)
+        draw.ellipse(
+            [x, y, x + dot_size, y + dot_size],
+            fill=(r, g, b),
+        )
 
     # Irregular clearing (the camp area)
     cx = random.randint(60, PATCH_SIZE - 60)
@@ -150,12 +177,12 @@ def generate_synthetic_suspicious(index: int, output_dir: Path):
     clearing_radius = random.randint(25, 50)
 
     # Draw clearing as irregular polygon
-    points = []
-    for angle in range(0, 360, random.randint(20, 40)):
-        import math
-        r = clearing_radius + random.randint(-15, 15)
-        px = cx + int(r * math.cos(math.radians(angle)))
-        py = cy + int(r * math.sin(math.radians(angle)))
+    points: list[tuple[int, int]] = []
+    angle_step = random.randint(20, 40)
+    for angle in range(0, 360, angle_step):
+        radius = clearing_radius + random.randint(-15, 15)
+        px = cx + int(radius * math.cos(math.radians(angle)))
+        py = cy + int(radius * math.sin(math.radians(angle)))
         points.append((px, py))
 
     if len(points) >= 3:
@@ -181,24 +208,33 @@ def generate_synthetic_suspicious(index: int, output_dir: Path):
         ])
 
         if struct_type == "circle":
-            r = random.randint(3, 8)
-            draw.ellipse([sx-r, sy-r, sx+r, sy+r], fill=struct_color)
+            sr = random.randint(3, 8)
+            draw.ellipse(
+                [sx - sr, sy - sr, sx + sr, sy + sr],
+                fill=struct_color,
+            )
         elif struct_type == "triangle":
-            size = random.randint(5, 12)
-            draw.polygon([
-                (sx, sy - size),
-                (sx - size, sy + size),
-                (sx + size, sy + size),
-            ], fill=struct_color)
+            tri_size = random.randint(5, 12)
+            draw.polygon(
+                [
+                    (sx, sy - tri_size),
+                    (sx - tri_size, sy + tri_size),
+                    (sx + tri_size, sy + tri_size),
+                ],
+                fill=struct_color,
+            )
         else:
             # Irregular quadrilateral
-            pts = [(sx + random.randint(-8, 8), sy + random.randint(-8, 8)) for _ in range(4)]
+            pts: list[tuple[int, int]] = [
+                (sx + random.randint(-8, 8), sy + random.randint(-8, 8))
+                for _ in range(4)
+            ]
             draw.polygon(pts, fill=struct_color)
 
     # Irregular paths (not roads — dirt tracks)
     num_paths = random.randint(1, 3)
     for _ in range(num_paths):
-        path_points = [(cx, cy)]
+        path_points: list[tuple[int, int]] = [(cx, cy)]
         for _ in range(random.randint(3, 6)):
             last = path_points[-1]
             next_pt = (
@@ -207,14 +243,25 @@ def generate_synthetic_suspicious(index: int, output_dir: Path):
             )
             path_points.append(next_pt)
         for i in range(len(path_points) - 1):
-            draw.line([path_points[i], path_points[i+1]], fill=(110, 95, 75), width=1)
+            draw.line(
+                [path_points[i], path_points[i + 1]],
+                fill=(110, 95, 75),
+                width=1,
+            )
 
     # Fire pit (heat source)
     if random.random() > 0.3:
         fx = cx + random.randint(-15, 15)
         fy = cy + random.randint(-15, 15)
-        draw.ellipse([fx-3, fy-3, fx+3, fy+3], fill=(200, 100, 50))
-        draw.ellipse([fx-5, fy-5, fx+5, fy+5], outline=(150, 80, 40), width=1)
+        draw.ellipse(
+            [fx - 3, fy - 3, fx + 3, fy + 3],
+            fill=(200, 100, 50),
+        )
+        draw.ellipse(
+            [fx - 5, fy - 5, fx + 5, fy + 5],
+            outline=(150, 80, 40),
+            width=1,
+        )
 
     # Apply slight blur
     img = img.filter(ImageFilter.GaussianBlur(radius=0.6))
@@ -228,25 +275,30 @@ def generate_synthetic_suspicious(index: int, output_dir: Path):
     img.save(output_dir / f"suspicious_{index:04d}.png")
 
 
-def generate_dataset(num_train: int = 200, num_val: int = 50):
+def generate_dataset(num_train: int = 200, num_val: int = 50) -> None:
     """Generate the full synthetic training dataset."""
-    print(f"\n  Generating {num_train} training + {num_val} validation images per class...")
+    print(
+        f"\n  Generating {num_train} training + {num_val} "
+        f"validation images per class..."
+    )
 
     for i in range(num_train):
         generate_synthetic_legal(i, TRAIN_DIR / "legal_activity")
         generate_synthetic_suspicious(i, TRAIN_DIR / "suspicious_encampment")
         if (i + 1) % 50 == 0:
-            print(f"    Training: {i+1}/{num_train} per class")
+            print(f"    Training: {i + 1}/{num_train} per class")
 
     for i in range(num_val):
         generate_synthetic_legal(num_train + i, VAL_DIR / "legal_activity")
-        generate_synthetic_suspicious(num_train + i, VAL_DIR / "suspicious_encampment")
+        generate_synthetic_suspicious(
+            num_train + i, VAL_DIR / "suspicious_encampment"
+        )
 
     print(f"  ✓ Generated {num_train * 2} training images")
     print(f"  ✓ Generated {num_val * 2} validation images")
 
 
-def print_dataset_stats():
+def print_dataset_stats() -> None:
     """Print stats about the current dataset."""
     print("\n  Dataset structure:")
     for split in ["train", "val"]:
@@ -257,13 +309,17 @@ def print_dataset_stats():
         for cls in CLASSES:
             cls_dir = split_dir / cls
             if cls_dir.exists():
-                count = len(list(cls_dir.glob("*.png"))) + len(list(cls_dir.glob("*.jpg")))
+                count = (
+                    len(list(cls_dir.glob("*.png")))
+                    + len(list(cls_dir.glob("*.jpg")))
+                )
                 print(f"    {split}/{cls}: {count} images")
             else:
                 print(f"    {split}/{cls}: NOT FOUND")
 
 
-def main():
+def main() -> None:
+    """Entry point for training data setup."""
     print("=" * 60)
     print("  EagleEye-Nigeria — ML Training Data Setup")
     print("=" * 60)
@@ -300,7 +356,7 @@ def main():
     generate_dataset(num_train=200, num_val=50)
 
     # Step 4: Create dataset metadata
-    metadata = {
+    metadata: dict[str, Any] = {
         "created": str(Path(os.path.abspath(__file__))),
         "classes": CLASSES,
         "train_per_class": 200,
@@ -317,10 +373,10 @@ def main():
     print_dataset_stats()
 
     print(f"\n  ✓ Dataset ready at: {DATA_DIR}")
-    print(f"\n  Next steps:")
-    print(f"    1. python -m ml.train          ← Train the model")
-    print(f"    2. Replace synthetic images with real satellite patches")
-    print(f"    3. Re-train for production accuracy")
+    print("\n  Next steps:")
+    print("    1. python -m ml.train          ← Train the model")
+    print("    2. Replace synthetic images with real satellite patches")
+    print("    3. Re-train for production accuracy")
     print("=" * 60)
 
 

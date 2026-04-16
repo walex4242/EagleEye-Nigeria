@@ -17,6 +17,7 @@ Run: python -m ml.download_real_data
 """
 
 from __future__ import annotations
+
 import os
 import sys
 import json
@@ -26,14 +27,50 @@ import hashlib
 import requests
 from pathlib import Path
 from io import BytesIO
+from typing import TYPE_CHECKING, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+PILLOW_AVAILABLE = False
+
 try:
-    from PIL import Image
+    from PIL import Image, ImageEnhance, ImageFilter
     import numpy as np
     PILLOW_AVAILABLE = True
 except ImportError:
-    PILLOW_AVAILABLE = False
+    pass
+
+if TYPE_CHECKING:
+    from PIL import Image, ImageEnhance, ImageFilter
+    import numpy as np
+
+# ════════════════════════════════════════════════════════════
+# PILLOW COMPATIBILITY (Pillow >= 9.1 moved enums)
+# ════════════════════════════════════════════════════════════
+# Use getattr to avoid Pylance "not a known attribute" errors
+# for constants that moved between Pillow versions.
+
+RESAMPLE: Any = None
+FLIP_LEFT_RIGHT: Any = None
+FLIP_TOP_BOTTOM: Any = None
+
+if PILLOW_AVAILABLE:
+    # Resampling method
+    _resampling = getattr(Image, "Resampling", None)
+    if _resampling is not None:
+        RESAMPLE = getattr(_resampling, "LANCZOS", None)
+    if RESAMPLE is None:
+        RESAMPLE = getattr(Image, "LANCZOS", 1)
+
+    # Transpose operations
+    _transpose = getattr(Image, "Transpose", None)
+    if _transpose is not None:
+        FLIP_LEFT_RIGHT = getattr(_transpose, "FLIP_LEFT_RIGHT", None)
+        FLIP_TOP_BOTTOM = getattr(_transpose, "FLIP_TOP_BOTTOM", None)
+    if FLIP_LEFT_RIGHT is None:
+        FLIP_LEFT_RIGHT = getattr(Image, "FLIP_LEFT_RIGHT", 0)
+    if FLIP_TOP_BOTTOM is None:
+        FLIP_TOP_BOTTOM = getattr(Image, "FLIP_TOP_BOTTOM", 1)
+
 
 DATA_DIR = Path(__file__).parent / "data"
 TRAIN_DIR = DATA_DIR / "train"
@@ -146,11 +183,17 @@ def _lat_lon_to_tile(lat: float, lon: float, zoom: int) -> tuple[int, int]:
     import math
     n = 2 ** zoom
     x = int((lon + 180.0) / 360.0 * n)
-    y = int((1.0 - math.log(math.tan(math.radians(lat)) + 1.0 / math.cos(math.radians(lat))) / math.pi) / 2.0 * n)
+    y = int(
+        (1.0 - math.log(
+            math.tan(math.radians(lat)) + 1.0 / math.cos(math.radians(lat))
+        ) / math.pi) / 2.0 * n
+    )
     return x, y
 
 
-def download_esri_tile(lat: float, lon: float, zoom: int = 17, size: int = PATCH_SIZE) -> Image.Image | None:
+def download_esri_tile(
+    lat: float, lon: float, zoom: int = 17, size: int = PATCH_SIZE
+) -> Image.Image | None:
     """
     Download a satellite tile from Esri World Imagery.
     Free, no API key required, good resolution.
@@ -158,11 +201,14 @@ def download_esri_tile(lat: float, lon: float, zoom: int = 17, size: int = PATCH
     x, y = _lat_lon_to_tile(lat, lon, zoom)
 
     # Download a 3x3 grid of tiles and crop the center
-    tiles = []
+    tiles: list[list[Image.Image]] = []
     for dy in range(-1, 2):
-        row = []
+        row: list[Image.Image] = []
         for dx in range(-1, 2):
-            url = f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{zoom}/{y + dy}/{x + dx}"
+            url = (
+                f"https://server.arcgisonline.com/ArcGIS/rest/services/"
+                f"World_Imagery/MapServer/tile/{zoom}/{y + dy}/{x + dx}"
+            )
             try:
                 resp = requests.get(url, timeout=15, headers={
                     "User-Agent": "EagleEye-Nigeria/0.3 (satellite-research)",
@@ -182,7 +228,10 @@ def download_esri_tile(lat: float, lon: float, zoom: int = 17, size: int = PATCH
     stitched = Image.new("RGB", (tile_size * 3, tile_size * 3))
     for row_idx, row in enumerate(tiles):
         for col_idx, tile in enumerate(row):
-            stitched.paste(tile.resize((tile_size, tile_size)), (col_idx * tile_size, row_idx * tile_size))
+            stitched.paste(
+                tile.resize((tile_size, tile_size)),
+                (col_idx * tile_size, row_idx * tile_size),
+            )
 
     # Crop center to desired size
     center_x = (tile_size * 3) // 2
@@ -208,7 +257,7 @@ def download_esri_tile(lat: float, lon: float, zoom: int = 17, size: int = PATCH
 
     # Ensure exact size
     if crop.size != (size, size):
-        crop = crop.resize((size, size), Image.LANCZOS)
+        crop = crop.resize((size, size), RESAMPLE)
 
     return crop
 
@@ -239,23 +288,22 @@ def download_google_static(
     return None
 
 
-def _generate_augmented_variants(img: Image.Image, count: int = 4) -> list[Image.Image]:
+def _generate_augmented_variants(
+    img: Image.Image, count: int = 4
+) -> list[Image.Image]:
     """Generate augmented variants of an image for dataset expansion."""
-    from PIL import ImageEnhance, ImageFilter
+    variants: list[Image.Image] = []
 
-    variants = []
-    arr = np.array(img)
-
-    for i in range(count):
+    for _i in range(count):
         aug = img.copy()
 
         # Random horizontal flip
         if random.random() > 0.5:
-            aug = aug.transpose(Image.FLIP_LEFT_RIGHT)
+            aug = aug.transpose(FLIP_LEFT_RIGHT)
 
         # Random vertical flip
         if random.random() > 0.5:
-            aug = aug.transpose(Image.FLIP_TOP_BOTTOM)
+            aug = aug.transpose(FLIP_TOP_BOTTOM)
 
         # Random rotation (90-degree increments)
         rot = random.choice([0, 90, 180, 270])
@@ -263,16 +311,18 @@ def _generate_augmented_variants(img: Image.Image, count: int = 4) -> list[Image
             aug = aug.rotate(rot)
 
         # Random brightness
-        enhancer = ImageEnhance.Brightness(aug)
-        aug = enhancer.enhance(random.uniform(0.8, 1.2))
+        bright_enhancer = ImageEnhance.Brightness(aug)
+        aug = bright_enhancer.enhance(random.uniform(0.8, 1.2))
 
         # Random contrast
-        enhancer = ImageEnhance.Contrast(aug)
-        aug = enhancer.enhance(random.uniform(0.8, 1.2))
+        contrast_enhancer = ImageEnhance.Contrast(aug)
+        aug = contrast_enhancer.enhance(random.uniform(0.8, 1.2))
 
         # Random slight blur (simulates different atmospheric conditions)
         if random.random() > 0.7:
-            aug = aug.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.3, 0.8)))
+            aug = aug.filter(
+                ImageFilter.GaussianBlur(radius=random.uniform(0.3, 0.8))
+            )
 
         # Random noise
         if random.random() > 0.5:
@@ -283,7 +333,7 @@ def _generate_augmented_variants(img: Image.Image, count: int = 4) -> list[Image
 
         # Ensure size
         if aug.size != (PATCH_SIZE, PATCH_SIZE):
-            aug = aug.resize((PATCH_SIZE, PATCH_SIZE), Image.LANCZOS)
+            aug = aug.resize((PATCH_SIZE, PATCH_SIZE), RESAMPLE)
 
         variants.append(aug)
 
@@ -292,7 +342,7 @@ def _generate_augmented_variants(img: Image.Image, count: int = 4) -> list[Image
 
 def _image_hash(img: Image.Image) -> str:
     """Generate a hash to detect duplicate images."""
-    small = img.resize((8, 8), Image.LANCZOS).convert("L")
+    small = img.resize((8, 8), RESAMPLE).convert("L")
     pixels = list(small.tobytes())
     avg = sum(pixels) / len(pixels)
     bits = "".join("1" if p > avg else "0" for p in pixels)
@@ -304,12 +354,12 @@ def _is_valid_satellite_image(img: Image.Image) -> bool:
     arr = np.array(img)
 
     # Check if mostly one color (blank tile)
-    std = np.std(arr)
+    std = float(np.std(arr))
     if std < 10:
         return False
 
     # Check if too dark (ocean/night)
-    mean = np.mean(arr)
+    mean = float(np.mean(arr))
     if mean < 20:
         return False
 
@@ -329,7 +379,7 @@ def download_dataset(
     val_split: float = 0.2,
     max_retries: int = 3,
     delay: float = 0.5,
-):
+) -> None:
     """
     Download real satellite imagery and build the training dataset.
 
@@ -342,7 +392,7 @@ def download_dataset(
     print("\n  ═══════════════════════════════════════════════════")
     print("  Downloading Real Satellite Imagery")
     print("  ═══════════════════════════════════════════════════")
-    print(f"  Source: Esri World Imagery (free, no API key)")
+    print("  Source: Esri World Imagery (free, no API key)")
     print(f"  Legal locations: {len(LEGAL_LOCATIONS)}")
     print(f"  Suspicious locations: {len(SUSPICIOUS_LOCATIONS)}")
     print(f"  Augmentation factor: {augment_factor}x")
@@ -357,22 +407,31 @@ def download_dataset(
             (split / cls).mkdir(parents=True, exist_ok=True)
 
     seen_hashes: set[str] = set()
-    stats = {"legal": {"downloaded": 0, "augmented": 0, "skipped": 0},
-             "suspicious": {"downloaded": 0, "augmented": 0, "skipped": 0}}
+    stats: dict[str, dict[str, int]] = {
+        "legal": {"downloaded": 0, "augmented": 0, "skipped": 0},
+        "suspicious": {"downloaded": 0, "augmented": 0, "skipped": 0},
+    }
 
-    def download_and_save(locations, class_name, stats_key):
-        images = []
+    def download_and_save(
+        locations: list[dict[str, Any]],
+        class_name: str,
+        stats_key: str,
+    ) -> tuple[int, int]:
+        images: list[Image.Image] = []
         total = len(locations)
 
         for idx, loc in enumerate(locations):
-            lat, lon, label, zoom = loc["lat"], loc["lon"], loc["label"], loc["zoom"]
+            lat: float = loc["lat"]
+            lon: float = loc["lon"]
+            zoom: int = loc["zoom"]
 
-            success = False
-            for attempt in range(max_retries):
+            for _attempt in range(max_retries):
                 # Try Google first, then Esri
-                img = None
+                img: Image.Image | None = None
                 if google_key:
-                    img = download_google_static(lat, lon, zoom, PATCH_SIZE, google_key)
+                    img = download_google_static(
+                        lat, lon, zoom, PATCH_SIZE, google_key
+                    )
 
                 if img is None:
                     img = download_esri_tile(lat, lon, zoom, PATCH_SIZE)
@@ -387,13 +446,14 @@ def download_dataset(
                     seen_hashes.add(h)
                     images.append(img)
                     stats[stats_key]["downloaded"] += 1
-                    success = True
 
                     # Also download nearby variants
-                    for offset_idx in range(3):
+                    for _offset_idx in range(3):
                         offset_lat = lat + random.uniform(-0.005, 0.005)
                         offset_lon = lon + random.uniform(-0.005, 0.005)
-                        nearby = download_esri_tile(offset_lat, offset_lon, zoom, PATCH_SIZE)
+                        nearby = download_esri_tile(
+                            offset_lat, offset_lon, zoom, PATCH_SIZE
+                        )
                         if nearby and _is_valid_satellite_image(nearby):
                             nh = _image_hash(nearby)
                             if nh not in seen_hashes:
@@ -407,14 +467,19 @@ def download_dataset(
                     time.sleep(delay)
 
             if (idx + 1) % 5 == 0 or idx == total - 1:
-                print(f"    [{class_name}] {idx + 1}/{total} locations processed "
-                      f"({stats[stats_key]['downloaded']} images)")
+                print(
+                    f"    [{class_name}] {idx + 1}/{total} locations processed "
+                    f"({stats[stats_key]['downloaded']} images)"
+                )
 
             time.sleep(delay)
 
         # Generate augmented variants
-        print(f"    [{class_name}] Generating {augment_factor}x augmented variants...")
-        augmented = []
+        print(
+            f"    [{class_name}] Generating {augment_factor}x augmented "
+            f"variants..."
+        )
+        augmented: list[Image.Image] = []
         for img in images:
             variants = _generate_augmented_variants(img, count=augment_factor)
             augmented.extend(variants)
@@ -429,23 +494,30 @@ def download_dataset(
         train_images = all_images[val_count:]
 
         # Save
-        for i, img in enumerate(train_images):
-            img.save(TRAIN_DIR / class_name / f"real_{class_name}_{i:04d}.png")
+        for i, save_img in enumerate(train_images):
+            save_img.save(
+                TRAIN_DIR / class_name / f"real_{class_name}_{i:04d}.png"
+            )
 
-        for i, img in enumerate(val_images):
-            img.save(VAL_DIR / class_name / f"real_{class_name}_{i:04d}.png")
+        for i, save_img in enumerate(val_images):
+            save_img.save(
+                VAL_DIR / class_name / f"real_{class_name}_{i:04d}.png"
+            )
 
-        print(f"    [{class_name}] Saved: {len(train_images)} train, {len(val_images)} val")
+        print(
+            f"    [{class_name}] Saved: {len(train_images)} train, "
+            f"{len(val_images)} val"
+        )
         return len(train_images), len(val_images)
 
     # Download legal activity images
-    print(f"\n  📥 Downloading legal_activity imagery...")
+    print("\n  📥 Downloading legal_activity imagery...")
     legal_train, legal_val = download_and_save(
         LEGAL_LOCATIONS, "legal_activity", "legal"
     )
 
     # Download suspicious encampment images
-    print(f"\n  📥 Downloading suspicious_encampment imagery...")
+    print("\n  📥 Downloading suspicious_encampment imagery...")
     susp_train, susp_val = download_and_save(
         SUSPICIOUS_LOCATIONS, "suspicious_encampment", "suspicious"
     )
@@ -466,19 +538,25 @@ def download_dataset(
     with open(DATA_DIR / "real_dataset_info.json", "w") as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"\n  ═══════════════════════════════════════════════════")
-    print(f"  ✅ Download Complete!")
-    print(f"  ═══════════════════════════════════════════════════")
-    print(f"  Legal:      {stats['legal']['downloaded']} originals + {stats['legal']['augmented']} augmented")
-    print(f"  Suspicious: {stats['suspicious']['downloaded']} originals + {stats['suspicious']['augmented']} augmented")
+    print("\n  ═══════════════════════════════════════════════════")
+    print("  ✅ Download Complete!")
+    print("  ═══════════════════════════════════════════════════")
+    print(
+        f"  Legal:      {stats['legal']['downloaded']} originals "
+        f"+ {stats['legal']['augmented']} augmented"
+    )
+    print(
+        f"  Suspicious: {stats['suspicious']['downloaded']} originals "
+        f"+ {stats['suspicious']['augmented']} augmented"
+    )
     print(f"  Train set:  {legal_train} legal + {susp_train} suspicious")
     print(f"  Val set:    {legal_val} legal + {susp_val} suspicious")
     print(f"  Metadata:   {DATA_DIR / 'real_dataset_info.json'}")
-    print(f"\n  Next: python -m ml.train")
-    print(f"  ═══════════════════════════════════════════════════")
+    print("\n  Next: python -m ml.train")
+    print("  ═══════════════════════════════════════════════════")
 
 
-def print_current_stats():
+def print_current_stats() -> None:
     """Print current dataset statistics."""
     print("\n  Current dataset:")
     total = 0
@@ -495,12 +573,16 @@ def print_current_stats():
                 real = len(list(cls_dir.glob("real_*")))
                 synth = count - real
                 total += count
-                print(f"    {split}/{cls}: {count} total ({real} real, {synth} synthetic)")
+                print(
+                    f"    {split}/{cls}: {count} total "
+                    f"({real} real, {synth} synthetic)"
+                )
 
     print(f"    Total: {total} images")
 
 
-def main():
+def main() -> None:
+    """Entry point for satellite data download."""
     print("=" * 60)
     print("  EagleEye-Nigeria — Real Satellite Data Download")
     print("=" * 60)

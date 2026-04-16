@@ -5,27 +5,33 @@ Sentinel-2 imagery acquisition via Copernicus Data Space Ecosystem (CDSE).
 Handles authentication, scene search, and band download for vegetation analysis.
 """
 
+from __future__ import annotations
+
 import os
 import json
 import hashlib
 import logging
+import tempfile
 import requests
 import numpy as np
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, field, asdict
 
 logger = logging.getLogger("eagleeye.sentinel2")
 
 # ── Constants ─────────────────────────────────────────────────
-CDSE_AUTH_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
+CDSE_AUTH_URL = (
+    "https://identity.dataspace.copernicus.eu/auth/realms/"
+    "CDSE/protocol/openid-connect/token"
+)
 CDSE_CATALOGUE_URL = "https://catalogue.dataspace.copernicus.eu/odata/v1"
 CDSE_PROCESS_URL = "https://sh.dataspace.copernicus.eu/api/v1/process"
 
 # Sentinel-2 band resolutions (metres)
-BAND_RESOLUTIONS = {
+BAND_RESOLUTIONS: Dict[str, int] = {
     "B02": 10, "B03": 10, "B04": 10, "B08": 10,      # Visible + NIR
     "B05": 20, "B06": 20, "B07": 20, "B8A": 20,      # Red-edge + narrow NIR
     "B11": 20, "B12": 20,                               # SWIR
@@ -34,7 +40,7 @@ BAND_RESOLUTIONS = {
 }
 
 # Nigeria bounding box (loose)
-NIGERIA_BBOX = {
+NIGERIA_BBOX: Dict[str, float] = {
     "west": 2.67,
     "south": 4.27,
     "east": 14.68,
@@ -42,7 +48,7 @@ NIGERIA_BBOX = {
 }
 
 # Known high-risk monitoring zones
-MONITORING_ZONES = {
+MONITORING_ZONES: Dict[str, Dict[str, Any]] = {
     "zamfara_corridor": {
         "name": "Zamfara Forest Corridor",
         "bbox": [6.0, 11.5, 7.5, 12.8],
@@ -79,6 +85,7 @@ MONITORING_ZONES = {
 @dataclass
 class SentinelScene:
     """Metadata for a single Sentinel-2 scene."""
+
     scene_id: str
     datetime: str
     cloud_cover: float
@@ -88,29 +95,29 @@ class SentinelScene:
     download_url: Optional[str] = None
     processing_level: str = "L2A"
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert scene metadata to a dictionary."""
         return asdict(self)
 
 
 @dataclass
 class BandData:
     """Container for a downloaded band array and its metadata."""
+
     band_name: str
     data: np.ndarray
     resolution: int
     scene_id: str
     crs: str = "EPSG:4326"
-    transform: Optional[Tuple] = None
+    transform: Optional[Tuple[float, ...]] = None
 
 
 class CopernicusAuthError(Exception):
     """Raised when Copernicus authentication fails."""
-    pass
 
 
 class SceneSearchError(Exception):
     """Raised when scene catalogue search fails."""
-    pass
 
 
 class Sentinel2Client:
@@ -129,7 +136,7 @@ class Sentinel2Client:
         username: Optional[str] = None,
         password: Optional[str] = None,
         cache_dir: str = "./data/sentinel2_cache",
-    ):
+    ) -> None:
         self.username = username or os.getenv("COPERNICUS_USER", "")
         self.password = password or os.getenv("COPERNICUS_PASSWORD", "")
         self.cache_dir = Path(cache_dir)
@@ -148,12 +155,16 @@ class Sentinel2Client:
 
     def _authenticate(self) -> str:
         """Obtain or refresh OAuth2 access token from CDSE."""
-        if self._access_token and self._token_expiry and datetime.utcnow() < self._token_expiry:
+        if (
+            self._access_token is not None
+            and self._token_expiry is not None
+            and datetime.utcnow() < self._token_expiry
+        ):
             return self._access_token
 
         logger.info("Authenticating with Copernicus Data Space...")
 
-        payload = {
+        payload: Dict[str, str] = {
             "grant_type": "password",
             "username": self.username,
             "password": self.password,
@@ -164,18 +175,24 @@ class Sentinel2Client:
             resp = requests.post(CDSE_AUTH_URL, data=payload, timeout=30)
             resp.raise_for_status()
         except requests.RequestException as e:
-            raise CopernicusAuthError(f"Authentication failed: {e}")
+            raise CopernicusAuthError(f"Authentication failed: {e}") from e
 
-        token_data = resp.json()
-        self._access_token = token_data["access_token"]
-        expires_in = token_data.get("expires_in", 600)
-        self._token_expiry = datetime.utcnow() + timedelta(seconds=expires_in - 60)
+        token_data: Dict[str, Any] = resp.json()
+        self._access_token = str(token_data["access_token"])
+        expires_in = int(token_data.get("expires_in", 600))
+        self._token_expiry = datetime.utcnow() + timedelta(
+            seconds=expires_in - 60
+        )
 
-        logger.info("Copernicus authentication successful (expires in %ds)", expires_in)
+        logger.info(
+            "Copernicus authentication successful (expires in %ds)",
+            expires_in,
+        )
         return self._access_token
 
     @property
     def _auth_headers(self) -> Dict[str, str]:
+        """Return authorization headers with a valid token."""
         token = self._authenticate()
         return {"Authorization": f"Bearer {token}"}
 
@@ -211,7 +228,7 @@ class Sentinel2Client:
             f"{east} {north},{west} {north},{west} {south}))')"
         )
 
-        collection = f"SENTINEL-2" if processing_level == "L1C" else "SENTINEL-2"
+        collection = "SENTINEL-2"
         product_type = f"S2MSI{processing_level}"
 
         filter_parts = [
@@ -219,13 +236,18 @@ class Sentinel2Client:
             footprint,
             f"ContentDate/Start gt {start_date}T00:00:00.000Z",
             f"ContentDate/Start lt {end_date}T23:59:59.999Z",
-            f"Attributes/OData.CSC.DoubleAttribute/any(att:att/Name eq 'cloudCover' and att/OData.CSC.DoubleAttribute/Value lt {max_cloud_cover})",
+            (
+                "Attributes/OData.CSC.DoubleAttribute/any("
+                "att:att/Name eq 'cloudCover' and "
+                "att/OData.CSC.DoubleAttribute/Value lt "
+                f"{max_cloud_cover})"
+            ),
             f"contains(Name,'{product_type}')",
         ]
 
         odata_filter = " and ".join(filter_parts)
 
-        params = {
+        params: Dict[str, Any] = {
             "$filter": odata_filter,
             "$orderby": "ContentDate/Start desc",
             "$top": max_results,
@@ -246,20 +268,20 @@ class Sentinel2Client:
             )
             resp.raise_for_status()
         except requests.RequestException as e:
-            raise SceneSearchError(f"Catalogue search failed: {e}")
+            raise SceneSearchError(f"Catalogue search failed: {e}") from e
 
-        results = resp.json().get("value", [])
-        scenes = []
+        results: List[Dict[str, Any]] = resp.json().get("value", [])
+        scenes: List[SentinelScene] = []
 
         for item in results:
             cloud_cover = 0.0
             for attr in item.get("Attributes", []):
                 if attr.get("Name") == "cloudCover":
-                    cloud_cover = attr.get("Value", 0.0)
+                    cloud_cover = float(attr.get("Value", 0.0))
                     break
 
             # Extract tile ID from product name
-            name = item.get("Name", "")
+            name: str = item.get("Name", "")
             parts = name.split("_")
             tile_id = ""
             for p in parts:
@@ -267,14 +289,19 @@ class Sentinel2Client:
                     tile_id = p
                     break
 
+            scene_id: str = item.get("Id", "")
+            content_date: Dict[str, str] = item.get("ContentDate", {})
+
             scene = SentinelScene(
-                scene_id=item.get("Id", ""),
-                datetime=item.get("ContentDate", {}).get("Start", ""),
+                scene_id=scene_id,
+                datetime=content_date.get("Start", ""),
                 cloud_cover=cloud_cover,
                 bbox=bbox,
                 tile_id=tile_id,
                 product_type=product_type,
-                download_url=f"{CDSE_CATALOGUE_URL}/Products({item.get('Id')})/",
+                download_url=(
+                    f"{CDSE_CATALOGUE_URL}/Products({scene_id})/"
+                ),
                 processing_level=processing_level,
             )
             scenes.append(scene)
@@ -288,7 +315,7 @@ class Sentinel2Client:
         self,
         bbox: List[float],
         date: str,
-        bands: List[str] = None,
+        bands: Optional[List[str]] = None,
         resolution: int = 10,
         width: int = 512,
         height: int = 512,
@@ -318,11 +345,13 @@ class Sentinel2Client:
 
         evalscript = self._build_evalscript(bands)
 
-        request_body = {
+        request_body: Dict[str, Any] = {
             "input": {
                 "bounds": {
                     "bbox": [west, south, east, north],
-                    "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"},
+                    "properties": {
+                        "crs": "http://www.opengis.net/def/crs/EPSG/0/4326",
+                    },
                 },
                 "data": [
                     {
@@ -385,8 +414,8 @@ class Sentinel2Client:
         output_bands = len(bands)
 
         # Return raw reflectance values scaled to 0–10000
-        sample_lines = []
-        for i, band in enumerate(bands):
+        sample_lines: List[str] = []
+        for band in bands:
             sample_lines.append(f"sample.{band}")
 
         return_values = ", ".join(sample_lines)
@@ -420,9 +449,11 @@ function evaluatePixel(sample) {{
 
             with MemoryFile(content) as memfile:
                 with memfile.open() as dataset:
-                    result = {}
+                    result: Dict[str, np.ndarray] = {}
                     for i, band_name in enumerate(bands):
-                        result[band_name] = dataset.read(i + 1).astype(np.float32)
+                        result[band_name] = dataset.read(i + 1).astype(
+                            np.float32
+                        )
                     return result
         except ImportError:
             logger.warning(
@@ -431,12 +462,13 @@ function evaluatePixel(sample) {{
             )
             # Minimal fallback: treat as raw float32 buffer
             arr = np.frombuffer(content, dtype=np.float32)
-            chunk_size = len(arr) // len(bands) if len(bands) > 0 else len(arr)
+            num_bands = len(bands) if len(bands) > 0 else 1
+            chunk_size = len(arr) // num_bands
             result = {}
             for i, band_name in enumerate(bands):
                 start = i * chunk_size
                 end = start + chunk_size
-                side = int(np.sqrt(chunk_size))
+                side = int(np.sqrt(float(chunk_size)))
                 if side * side == chunk_size:
                     result[band_name] = arr[start:end].reshape(side, side)
                 else:
@@ -452,30 +484,61 @@ function evaluatePixel(sample) {{
         bands: List[str],
         resolution: int,
     ) -> str:
+        """Generate a unique cache key for a band request."""
         raw = f"{bbox}-{date}-{sorted(bands)}-{resolution}"
         return hashlib.md5(raw.encode()).hexdigest()
 
-    def _save_to_cache(self, key: str, data: Dict[str, np.ndarray]):
+    def _save_to_cache(
+        self, key: str, data: Dict[str, np.ndarray]
+    ) -> None:
+        """Save band data to compressed numpy archive."""
         cache_path = self.cache_dir / f"{key}.npz"
-        np.savez_compressed(str(cache_path), **data)
+        # Save each band array individually to avoid Pylance
+        # misinterpreting **data kwargs as positional args
+        # in np.savez_compressed signature
+        with tempfile.NamedTemporaryFile(
+            dir=str(self.cache_dir),
+            suffix=".npz",
+            delete=False,
+        ) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            arrays_to_save: Dict[str, Any] = {
+                band_name: band_array
+                for band_name, band_array in data.items()
+            }
+            np.savez_compressed(tmp_path, **arrays_to_save)
+            Path(tmp_path).replace(cache_path)
+        except Exception:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
+
         logger.debug("Cached band data: %s", cache_path)
 
-    def _load_from_cache(self, key: str) -> Optional[Dict[str, np.ndarray]]:
+    def _load_from_cache(
+        self, key: str
+    ) -> Optional[Dict[str, np.ndarray]]:
+        """Load band data from cache if available."""
         cache_path = self.cache_dir / f"{key}.npz"
         if cache_path.exists():
             loaded = np.load(str(cache_path))
             return dict(loaded)
         return None
 
-    def clear_cache(self, older_than_days: int = 30):
+    def clear_cache(self, older_than_days: int = 30) -> int:
         """Remove cached files older than the specified number of days."""
         cutoff = datetime.utcnow() - timedelta(days=older_than_days)
         removed = 0
-        for f in self.cache_dir.glob("*.npz"):
-            if datetime.fromtimestamp(f.stat().st_mtime) < cutoff:
-                f.unlink()
+        for cache_file in self.cache_dir.glob("*.npz"):
+            file_mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            if file_mtime < cutoff:
+                cache_file.unlink()
                 removed += 1
-        logger.info("Cleared %d cached files older than %d days", removed, older_than_days)
+        logger.info(
+            "Cleared %d cached files older than %d days",
+            removed, older_than_days,
+        )
         return removed
 
 

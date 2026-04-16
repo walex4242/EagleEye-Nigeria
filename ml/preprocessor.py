@@ -14,24 +14,37 @@ Used in Phase 3: AI classification of encampments vs. legal activity.
 """
 
 from __future__ import annotations
-import numpy as np
+
+from typing import TYPE_CHECKING, Any
+
+TORCH_AVAILABLE = False
 
 try:
+    import numpy as np
     import torch
     import torchvision.transforms as T
     from PIL import Image
     TORCH_AVAILABLE = True
 except ImportError:
-    TORCH_AVAILABLE = False
+    pass
+
+if TYPE_CHECKING:
+    import numpy as np
+    import torch
+    import torchvision.transforms as T
+    from PIL import Image
 
 # Standard ImageNet normalisation values
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD  = [0.229, 0.224, 0.225]
+IMAGENET_STD = [0.229, 0.224, 0.225]
 
 MODEL_INPUT_SIZE = 224
 
 
-def preprocess_image(source, size: int = MODEL_INPUT_SIZE):
+def preprocess_image(
+    source: str | np.ndarray | Image.Image,
+    size: int = MODEL_INPUT_SIZE,
+) -> torch.Tensor | None:
     """
     Load and preprocess a satellite image patch for model inference.
 
@@ -54,23 +67,31 @@ def preprocess_image(source, size: int = MODEL_INPUT_SIZE):
     transform = T.Compose([
         T.Resize((size, size)),
         T.ToTensor(),
-        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ])
+
+    image: Image.Image
 
     if isinstance(source, str):
         image = Image.open(source).convert("RGB")
     elif isinstance(source, np.ndarray):
         image = Image.fromarray(source.astype(np.uint8)).convert("RGB")
-    elif TORCH_AVAILABLE and isinstance(source, Image.Image):
+    elif isinstance(source, Image.Image):
         image = source.convert("RGB")
     else:
         raise ValueError(f"Unsupported source type: {type(source)}")
 
-    tensor = transform(image).unsqueeze(0)  # Add batch dimension → [1, C, H, W]
+    transformed = transform(image)
+    assert isinstance(transformed, torch.Tensor)
+    tensor = transformed.unsqueeze(0)  # [1, C, H, W]
     return tensor
 
 
-def extract_patches(image_array: np.ndarray, patch_size: int = 224, stride: int = 112) -> list:
+def extract_patches(
+    image_array: np.ndarray,
+    patch_size: int = 224,
+    stride: int = 112,
+) -> list[dict[str, Any]]:
     """
     Slide a window over a large satellite image and extract patches.
 
@@ -86,7 +107,7 @@ def extract_patches(image_array: np.ndarray, patch_size: int = 224, stride: int 
         return []
 
     h, w = image_array.shape[:2]
-    patches = []
+    patches: list[dict[str, Any]] = []
 
     for row in range(0, h - patch_size + 1, stride):
         for col in range(0, w - patch_size + 1, stride):

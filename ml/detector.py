@@ -12,10 +12,13 @@ Phase 3 deliverable — model weights are saved to ml/weights/ after training.
 """
 
 from __future__ import annotations
+
 import os
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+TORCH_AVAILABLE = False
 
 try:
     import torch
@@ -23,10 +26,7 @@ try:
     import torchvision.models as models
     TORCH_AVAILABLE = True
 except ImportError:
-    torch = None   # type: ignore[assignment]
-    nn = None      # type: ignore[assignment]
-    models = None  # type: ignore[assignment]
-    TORCH_AVAILABLE = False
+    pass
 
 if TYPE_CHECKING:
     import torch
@@ -46,7 +46,7 @@ class CampDetector:
     """
 
     def __init__(self, weights_path: str | Path | None = None):
-        if not TORCH_AVAILABLE or torch is None:
+        if not TORCH_AVAILABLE:
             print("Warning: PyTorch not available. CampDetector running in mock mode.")
             self.model = None
             self.device = None
@@ -71,8 +71,6 @@ class CampDetector:
 
     def _build_model(self) -> nn.Module:
         """Build MobileNetV3-Small with a binary output head."""
-        assert torch is not None and nn is not None and models is not None
-
         model = models.mobilenet_v3_small(weights=None)
 
         # Type-narrow so Pylance knows classifier[3] is nn.Linear
@@ -95,7 +93,7 @@ class CampDetector:
         Returns:
             dict with label, confidence, flag, class_id
         """
-        if not TORCH_AVAILABLE or torch is None or self.model is None:
+        if not TORCH_AVAILABLE or self.model is None:
             return self._mock_prediction()
 
         with torch.no_grad():
@@ -118,7 +116,7 @@ class CampDetector:
 
     def save_weights(self, path: str | Path | None = None) -> None:
         """Save current model weights to disk."""
-        if not TORCH_AVAILABLE or torch is None or self.model is None:
+        if not TORCH_AVAILABLE or self.model is None:
             print("Cannot save weights — model not available.")
             return
         save_path = Path(path) if path else WEIGHTS_PATH

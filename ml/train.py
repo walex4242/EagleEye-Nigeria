@@ -11,11 +11,16 @@ Run:
     python -m ml.train                 ← Train the model
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import json
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+TORCH_AVAILABLE = False
 
 try:
     import torch
@@ -26,7 +31,15 @@ try:
     import torchvision.datasets as datasets
     TORCH_AVAILABLE = True
 except ImportError:
-    TORCH_AVAILABLE = False
+    pass
+
+if TYPE_CHECKING:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torch.utils.data import DataLoader, WeightedRandomSampler
+    import torchvision.transforms as T
+    import torchvision.datasets as datasets
 
 DATA_DIR = Path(__file__).parent / "data"
 WEIGHTS_DIR = Path(__file__).parent / "weights"
@@ -40,7 +53,9 @@ NUM_CLASSES = 2
 PATIENCE = 8  # Early stopping patience
 
 
-def get_transforms(is_real: bool = False):
+def get_transforms(
+    is_real: bool = False,
+) -> tuple[T.Compose, T.Compose]:
     """
     Get transforms. Use stronger augmentation for real data.
     """
@@ -50,8 +65,12 @@ def get_transforms(is_real: bool = False):
             T.RandomHorizontalFlip(),
             T.RandomVerticalFlip(),
             T.RandomRotation(20),
-            T.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-            T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
+            T.RandomAffine(
+                degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)
+            ),
+            T.ColorJitter(
+                brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05
+            ),
             T.RandomGrayscale(p=0.05),
             T.ToTensor(),
             T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
@@ -86,18 +105,22 @@ def _count_real_images(directory: Path) -> int:
     return count
 
 
-def _get_class_weights(dataset) -> torch.Tensor:
+def _get_class_weights(dataset: datasets.ImageFolder) -> torch.Tensor:
     """Calculate class weights for imbalanced datasets."""
     class_counts = [0] * NUM_CLASSES
     for _, label in dataset:
         class_counts[label] += 1
 
     total = sum(class_counts)
-    weights = [total / (NUM_CLASSES * c) if c > 0 else 0 for c in class_counts]
+    weights = [
+        total / (NUM_CLASSES * c) if c > 0 else 0.0
+        for c in class_counts
+    ]
     return torch.FloatTensor(weights)
 
 
-def train():
+def train() -> None:
+    """Run the full training pipeline."""
     if not TORCH_AVAILABLE:
         print("❌ PyTorch is required. Install: pip install torch torchvision")
         return
@@ -118,7 +141,11 @@ def train():
 
     # Detect data type
     real_count = _count_real_images(train_dir)
-    total_files = sum(len(list(d.glob("*.*"))) for d in train_dir.iterdir() if d.is_dir())
+    total_files = sum(
+        len(list(d.glob("*.*")))
+        for d in train_dir.iterdir()
+        if d.is_dir()
+    )
     is_real = real_count > total_files * 0.3  # >30% real = use real augmentation
 
     data_type = "REAL satellite" if is_real else "SYNTHETIC"
@@ -139,23 +166,34 @@ def train():
 
     # Use weighted sampling if classes are imbalanced
     class_weights = _get_class_weights(train_ds)
-    sample_weights = [class_weights[label] for _, label in train_ds]
+    sample_weights = [
+        float(class_weights[label]) for _, label in train_ds
+    ]
     sampler = WeightedRandomSampler(sample_weights, len(train_ds))
 
     train_loader = DataLoader(
-        train_ds, batch_size=BATCH_SIZE, sampler=sampler,
-        num_workers=num_workers, pin_memory=True,
+        train_ds,
+        batch_size=BATCH_SIZE,
+        sampler=sampler,
+        num_workers=num_workers,
+        pin_memory=True,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=BATCH_SIZE, shuffle=False,
-        num_workers=num_workers, pin_memory=True,
+        val_ds,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
     )
 
     print(f"  Training samples: {len(train_ds)}")
     print(f"  Validation samples: {len(val_ds)}")
     print(f"  Classes: {train_ds.classes}")
     print(f"  Class mapping: {train_ds.class_to_idx}")
-    print(f"  Class balance: {[sum(1 for _, l in train_ds if l == i) for i in range(NUM_CLASSES)]}")
+    print(
+        f"  Class balance: "
+        f"{[sum(1 for _, l in train_ds if l == i) for i in range(NUM_CLASSES)]}"
+    )
 
     # Build model
     from ml.detector import CampDetector
@@ -171,28 +209,39 @@ def train():
     # Use weighted loss for class imbalance
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=LR_MIN)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=EPOCHS, eta_min=LR_MIN
+    )
 
     print(f"  Device: {device}")
     print(f"  Epochs: {EPOCHS}, Batch: {BATCH_SIZE}, LR: {LR}")
-    print(f"  Optimizer: AdamW + CosineAnnealing")
+    print("  Optimizer: AdamW + CosineAnnealing")
     print(f"  Early stopping patience: {PATIENCE}")
-    print(f"\n  {'Epoch':>5} | {'Loss':>8} | {'Train':>7} | {'Val':>7} | {'LR':>10} | {'Time':>5}")
+    print(
+        f"\n  {'Epoch':>5} | {'Loss':>8} | {'Train':>7} | "
+        f"{'Val':>7} | {'LR':>10} | {'Time':>5}"
+    )
     print(f"  {'─' * 58}")
 
     best_val_acc = 0.0
     patience_counter = 0
-    history = []
+    history: list[dict[str, Any]] = []
+    final_epoch = 0
 
     for epoch in range(1, EPOCHS + 1):
+        final_epoch = epoch
         epoch_start = time.time()
 
         # ── Training ──
         model.train()
-        train_loss, train_correct, train_total = 0.0, 0, 0
+        train_loss = 0.0
+        train_correct = 0
+        train_total = 0
 
         for images, labels in train_loader:
-            images, labels = images.to(device), labels.to(device)
+            images = images.to(device)
+            labels = labels.to(device)
+
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, labels)
@@ -203,29 +252,34 @@ def train():
 
             optimizer.step()
             train_loss += loss.item() * images.size(0)
-            train_correct += (outputs.argmax(1) == labels).sum().item()
+            train_correct += int((outputs.argmax(1) == labels).sum().item())
             train_total += images.size(0)
 
         scheduler.step()
 
         # ── Validation ──
         model.eval()
-        val_correct, val_total = 0, 0
+        val_correct = 0
+        val_total = 0
         val_loss = 0.0
 
         with torch.no_grad():
-            for images, labels in val_loader:
-                images, labels = images.to(device), labels.to(device)
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item() * images.size(0)
-                val_correct += (outputs.argmax(1) == labels).sum().item()
-                val_total += images.size(0)
+            for val_images, val_labels in val_loader:
+                val_images = val_images.to(device)
+                val_labels = val_labels.to(device)
 
-        train_acc = train_correct / train_total if train_total > 0 else 0
-        val_acc = val_correct / val_total if val_total > 0 else 0
-        avg_loss = train_loss / train_total if train_total > 0 else 0
-        current_lr = optimizer.param_groups[0]["lr"]
+                val_outputs = model(val_images)
+                v_loss = criterion(val_outputs, val_labels)
+                val_loss += v_loss.item() * val_images.size(0)
+                val_correct += int(
+                    (val_outputs.argmax(1) == val_labels).sum().item()
+                )
+                val_total += val_images.size(0)
+
+        train_acc = train_correct / train_total if train_total > 0 else 0.0
+        val_acc = val_correct / val_total if val_total > 0 else 0.0
+        avg_loss = train_loss / train_total if train_total > 0 else 0.0
+        current_lr = float(optimizer.param_groups[0]["lr"])
         elapsed = time.time() - epoch_start
 
         history.append({
@@ -245,35 +299,44 @@ def train():
         else:
             patience_counter += 1
 
-        print(f"  {epoch:5d} | {avg_loss:8.4f} | {train_acc:6.1%} | {val_acc:6.1%} | {current_lr:10.2e} | {elapsed:4.1f}s{marker}")
+        print(
+            f"  {epoch:5d} | {avg_loss:8.4f} | {train_acc:6.1%} | "
+            f"{val_acc:6.1%} | {current_lr:10.2e} | "
+            f"{elapsed:4.1f}s{marker}"
+        )
 
         # Early stopping
         if patience_counter >= PATIENCE:
-            print(f"\n  ⚠️  Early stopping at epoch {epoch} (no improvement for {PATIENCE} epochs)")
+            print(
+                f"\n  ⚠️  Early stopping at epoch {epoch} "
+                f"(no improvement for {PATIENCE} epochs)"
+            )
             break
 
     # ── Save training log ──
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOGS_DIR / "training_log.json"
 
+    log_data: dict[str, Any] = {
+        "epochs_run": final_epoch,
+        "epochs_max": EPOCHS,
+        "batch_size": BATCH_SIZE,
+        "learning_rate": LR,
+        "best_val_acc": round(best_val_acc, 4),
+        "data_type": data_type,
+        "real_images": real_count,
+        "total_images": total_files,
+        "history": history,
+        "classes": train_ds.classes,
+        "train_samples": len(train_ds),
+        "val_samples": len(val_ds),
+    }
+
     with open(log_path, "w") as f:
-        json.dump({
-            "epochs_run": epoch,
-            "epochs_max": EPOCHS,
-            "batch_size": BATCH_SIZE,
-            "learning_rate": LR,
-            "best_val_acc": round(best_val_acc, 4),
-            "data_type": data_type,
-            "real_images": real_count,
-            "total_images": total_files,
-            "history": history,
-            "classes": train_ds.classes,
-            "train_samples": len(train_ds),
-            "val_samples": len(val_ds),
-        }, f, indent=2)
+        json.dump(log_data, f, indent=2)
 
     print(f"\n  {'=' * 58}")
-    print(f"  ✅ Training complete!")
+    print("  ✅ Training complete!")
     print(f"  ✅ Best validation accuracy: {best_val_acc:.1%}")
     print(f"  ✅ Data type: {data_type}")
     print(f"  ✅ Weights: {WEIGHTS_DIR / 'camp_detector_v1.pt'}")

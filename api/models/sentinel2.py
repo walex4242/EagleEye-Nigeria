@@ -4,42 +4,46 @@ api/models/sentinel2.py
 Pydantic schemas for Sentinel-2 vegetation change detection endpoints.
 """
 
-from pydantic import BaseModel, Field, validator
-from typing import List, Optional, Dict
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import List, Optional, Dict, Any
 from enum import Enum
 from datetime import date
 
 
 class VegetationIndexEnum(str, Enum):
     ndvi = "ndvi"
-    evi  = "evi"
+    evi = "evi"
     savi = "savi"
-    nbr  = "nbr"
+    nbr = "nbr"
     ndmi = "ndmi"
 
 
 class SeverityEnum(str, Enum):
-    low      = "low"
+    low = "low"
     moderate = "moderate"
-    high     = "high"
+    high = "high"
     critical = "critical"
 
 
 class BBoxModel(BaseModel):
-    west:  float = Field(..., ge=-180, le=180, description="Western longitude")
-    south: float = Field(..., ge=-90,  le=90,  description="Southern latitude")
-    east:  float = Field(..., ge=-180, le=180, description="Eastern longitude")
-    north: float = Field(..., ge=-90,  le=90,  description="Northern latitude")
+    west: float = Field(..., ge=-180, le=180, description="Western longitude")
+    south: float = Field(..., ge=-90, le=90, description="Southern latitude")
+    east: float = Field(..., ge=-180, le=180, description="Eastern longitude")
+    north: float = Field(..., ge=-90, le=90, description="Northern latitude")
 
-    @validator("east")
-    def east_gt_west(cls, v, values):
-        if "west" in values and v <= values["west"]:
+    @field_validator("east")
+    @classmethod
+    def east_gt_west(cls, v: float, info: Any) -> float:
+        if "west" in info.data and v <= info.data["west"]:
             raise ValueError("east must be greater than west")
         return v
 
-    @validator("north")
-    def north_gt_south(cls, v, values):
-        if "south" in values and v <= values["south"]:
+    @field_validator("north")
+    @classmethod
+    def north_gt_south(cls, v: float, info: Any) -> float:
+        if "south" in info.data and v <= info.data["south"]:
             raise ValueError("north must be greater than south")
         return v
 
@@ -50,14 +54,8 @@ class BBoxModel(BaseModel):
 # ── Request Schemas ───────────────────────────────────────────
 
 class SceneSearchRequest(BaseModel):
-    bbox: BBoxModel
-    start_date: date
-    end_date: date
-    max_cloud_cover: float = Field(30.0, ge=0.0, le=100.0)
-    max_results: int = Field(20, ge=1, le=100)
-
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "bbox": {
                     "west": 6.0, "south": 11.5,
@@ -69,9 +67,30 @@ class SceneSearchRequest(BaseModel):
                 "max_results": 10,
             }
         }
+    )
+
+    bbox: BBoxModel
+    start_date: date
+    end_date: date
+    max_cloud_cover: float = Field(30.0, ge=0.0, le=100.0)
+    max_results: int = Field(20, ge=1, le=100)
 
 
 class ChangeDetectionRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "zone_name": "zamfara_corridor",
+                "date_before": "2024-01-01",
+                "date_after": "2024-01-15",
+                "index": "ndvi",
+                "vegetation_zone": "sudan_savanna",
+                "correlate_hotspots": True,
+                "correlate_acled": False,
+            }
+        }
+    )
+
     zone_name: Optional[str] = Field(
         None,
         description=(
@@ -113,24 +132,14 @@ class ChangeDetectionRequest(BaseModel):
         description="Cross-reference results with ACLED conflict events.",
     )
 
-    @validator("bbox", always=True)
-    def zone_or_bbox(cls, v, values):
-        if not values.get("zone_name") and v is None:
+    @field_validator("bbox")
+    @classmethod
+    def zone_or_bbox(
+        cls, v: Optional[BBoxModel], info: Any
+    ) -> Optional[BBoxModel]:
+        if not info.data.get("zone_name") and v is None:
             raise ValueError("Either zone_name or bbox must be provided")
         return v
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "zone_name": "zamfara_corridor",
-                "date_before": "2024-01-01",
-                "date_after": "2024-01-15",
-                "index": "ndvi",
-                "vegetation_zone": "sudan_savanna",
-                "correlate_hotspots": True,
-                "correlate_acled": False,
-            }
-        }
 
 
 class VegetationSnapshotRequest(BaseModel):
@@ -158,15 +167,15 @@ class ChangeEventResponse(BaseModel):
     classification: str
     confidence: float
     vegetation_zone: str
-    metadata: Dict = {}
+    metadata: Dict[str, Any] = {}
     # Optional correlation fields
     nearby_hotspots: Optional[int] = None
     thermal_correlation: Optional[bool] = None
-    nearest_hotspots: Optional[List[Dict]] = None
+    nearest_hotspots: Optional[List[Dict[str, Any]]] = None
     nearby_conflicts: Optional[int] = None
     nearby_fatalities: Optional[int] = None
     conflict_correlation: Optional[bool] = None
-    nearest_conflicts: Optional[List[Dict]] = None
+    nearest_conflicts: Optional[List[Dict[str, Any]]] = None
 
 
 class VegetationSnapshotResponse(BaseModel):
