@@ -3,259 +3,395 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>EagleEye-Nigeria — Thermal Hotspot Dashboard</title>
-    <link
-      rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    />
+    <title>EagleEye-Nigeria — Satellite Intelligence Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <style>
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
 
       body {
-        font-family: 'Segoe UI', sans-serif;
-        background: #0d1117;
-        color: #e6edf3;
-        height: 100vh;
-        display: flex;
-        flex-direction: column;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        background: #0d1117; color: #e6edf3;
+        height: 100vh; display: flex; flex-direction: column;
       }
 
       /* ── Header ── */
       header {
-        background: #161b22;
-        border-bottom: 1px solid #30363d;
-        padding: 12px 20px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        flex-shrink: 0;
+        background: #161b22; border-bottom: 1px solid #30363d;
+        padding: 10px 20px; display: flex; align-items: center;
+        justify-content: space-between; flex-shrink: 0; z-index: 1001;
       }
-
-      .header-left {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-
-      .logo {
-        font-size: 22px;
-      }
-
-      .header-title {
-        font-size: 16px;
-        font-weight: 600;
-        color: #e6edf3;
-      }
-
-      .header-sub {
-        font-size: 11px;
-        color: #8b949e;
-        margin-top: 1px;
-      }
+      .header-left { display: flex; align-items: center; gap: 10px; }
+      .logo { font-size: 22px; }
+      .header-title { font-size: 16px; font-weight: 600; }
+      .header-sub { font-size: 11px; color: #8b949e; margin-top: 1px; }
+      .header-right { display: flex; align-items: center; gap: 12px; }
 
       .status-pill {
-        font-size: 11px;
-        padding: 4px 10px;
-        border-radius: 99px;
-        background: #1f3a1f;
-        color: #3fb950;
-        border: 1px solid #238636;
+        font-size: 11px; padding: 4px 10px; border-radius: 99px;
+        background: #1f3a1f; color: #3fb950; border: 1px solid #238636;
+        transition: all 0.3s ease;
+      }
+      .status-pill.error { background: #3a1f1f; color: #f85149; border-color: #f85149; }
+      .status-pill.loading { background: #3a2f1f; color: #d29922; border-color: #d29922; }
+
+      .component-pills { display: flex; gap: 6px; }
+      .comp-pill {
+        font-size: 10px; padding: 2px 7px; border-radius: 99px;
+        border: 1px solid #30363d; background: #21262d; color: #8b949e;
+      }
+      .comp-pill.active { background: #1f3a1f; color: #3fb950; border-color: #238636; }
+      .comp-pill.inactive { background: #3a1f1f; color: #f85149; border-color: #f8514966; }
+
+      /* ── Alert banner ── */
+      .alert-banner {
+        background: #3a1f1f; border-bottom: 1px solid #f85149;
+        padding: 8px 20px; font-size: 13px; color: #f85149;
+        display: none; align-items: center; gap: 8px; flex-shrink: 0;
+      }
+      .alert-banner.visible { display: flex; }
+      .alert-banner .alert-close {
+        margin-left: auto; cursor: pointer; background: none;
+        border: none; color: #f85149; font-size: 16px; padding: 0 4px;
       }
 
       /* ── Stats bar ── */
       .stats-bar {
-        background: #161b22;
-        border-bottom: 1px solid #30363d;
-        padding: 10px 20px;
-        display: flex;
-        gap: 24px;
-        flex-shrink: 0;
-        align-items: center;
-        flex-wrap: wrap;
+        background: #161b22; border-bottom: 1px solid #30363d;
+        padding: 10px 20px; display: flex; gap: 18px;
+        flex-shrink: 0; align-items: center; flex-wrap: wrap; z-index: 1001;
       }
-
-      .stat {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-      }
-
+      .stat { display: flex; flex-direction: column; gap: 2px; }
       .stat-label {
-        font-size: 10px;
-        color: #8b949e;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        font-size: 10px; color: #8b949e;
+        text-transform: uppercase; letter-spacing: 0.5px;
+      }
+      .stat-value { font-size: 18px; font-weight: 600; transition: color 0.3s ease; }
+      .stat-value.high { color: #f85149; font-size: 14px; }
+      .stat-value.medium { color: #d29922; }
+      .stat-value.low { color: #3fb950; }
+
+      .confidence-values {
+        display: flex;
+        gap: 8px;
+        margin-top: 2px;
       }
 
-      .stat-value {
-        font-size: 18px;
-        font-weight: 600;
-        color: #e6edf3;
-      }
+      .divider { width: 1px; height: 32px; background: #30363d; }
 
-      .stat-value.high {
-        color: #f85149;
+      /* ── Threat pills ── */
+      .threat-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+      .threat-pill {
+        font-size: 11px; padding: 2px 8px; border-radius: 6px;
+        display: flex; align-items: center; gap: 4px;
+        border: 1px solid transparent; cursor: pointer;
+        transition: all 0.15s;
       }
-      .stat-value.medium {
-        color: #d29922;
-      }
-      .stat-value.low {
-        color: #3fb950;
-      }
+      .threat-pill:hover { opacity: 0.85; transform: scale(1.05); }
+      .threat-pill.critical { background: #f8514922; color: #f85149; border-color: #f8514944; }
+      .threat-pill.high-pri { background: #ff6b3522; color: #ff6b35; border-color: #ff6b3544; }
+      .threat-pill.elevated { background: #d2992222; color: #d29922; border-color: #d2992244; }
+      .threat-pill.monitor { background: #3fb95022; color: #3fb950; border-color: #3fb95044; }
+      .pill-count { font-weight: 700; font-size: 13px; }
 
-      .divider {
-        width: 1px;
-        height: 32px;
-        background: #30363d;
+      /* ── Zone Stats ── */
+      .zone-stats { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .zone-badge {
+        font-size: 11px; padding: 3px 8px; border-radius: 6px;
+        background: #21262d; border: 1px solid #30363d;
+        display: flex; align-items: center; gap: 5px; white-space: nowrap;
       }
+      .zone-badge .zone-count { font-weight: 700; color: #f85149; }
 
       /* ── Controls ── */
-      .controls {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-left: auto;
-      }
-
-      .controls label {
-        font-size: 12px;
-        color: #8b949e;
-      }
-
+      .controls { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+      .controls label { font-size: 12px; color: #8b949e; }
       .controls select {
-        background: #21262d;
-        color: #e6edf3;
-        border: 1px solid #30363d;
-        border-radius: 6px;
-        padding: 4px 8px;
-        font-size: 12px;
-        cursor: pointer;
+        background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+        border-radius: 6px; padding: 4px 8px; font-size: 12px;
+        cursor: pointer; outline: none;
       }
+      .controls select:focus { border-color: #58a6ff; }
+
+      .filter-btn {
+        background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+        border-radius: 6px; padding: 5px 10px; font-size: 11px;
+        cursor: pointer; transition: all 0.15s;
+      }
+      .filter-btn:hover { background: #30363d; }
+      .filter-btn.active { background: #388bfd26; border-color: #58a6ff; color: #58a6ff; }
+      .filter-btn.veg-active { background: #23863626; border-color: #3fb950; color: #3fb950; }
 
       .refresh-btn {
-        background: #21262d;
-        color: #e6edf3;
-        border: 1px solid #30363d;
-        border-radius: 6px;
-        padding: 5px 12px;
-        font-size: 12px;
-        cursor: pointer;
-        transition: background 0.15s;
+        background: #238636; color: #fff; border: 1px solid #2ea043;
+        border-radius: 6px; padding: 5px 12px; font-size: 12px;
+        cursor: pointer; font-weight: 600; transition: background 0.15s;
       }
-
-      .refresh-btn:hover {
-        background: #30363d;
-      }
+      .refresh-btn:hover { background: #2ea043; }
+      .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
       /* ── Map ── */
-      #map {
-        flex: 1;
-        width: 100%;
+      #map { flex: 1; width: 100%; }
+
+      /* ── Leaflet popup ── */
+      .leaflet-popup-content-wrapper {
+        background: #161b22 !important; color: #e6edf3 !important;
+        border: 1px solid #30363d !important; border-radius: 10px !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
       }
+      .leaflet-popup-tip { background: #161b22 !important; }
+      .leaflet-popup-close-button { color: #8b949e !important; }
+      .leaflet-popup-close-button:hover { color: #e6edf3 !important; }
+
+      .popup-header {
+        font-weight: 600; margin-bottom: 8px; font-size: 14px;
+        display: flex; align-items: center; gap: 6px;
+      }
+      .popup-badge {
+        margin-left: auto; font-size: 10px; padding: 2px 6px;
+        border-radius: 4px; font-weight: 700; letter-spacing: 0.3px;
+      }
+      .popup-table { font-size: 12px; width: 100%; border-collapse: collapse; }
+      .popup-table td { padding: 3px 0; vertical-align: top; }
+      .popup-table td:first-child { color: #8b949e; padding-right: 12px; white-space: nowrap; }
+      .popup-zone-badge {
+        display: inline-block; padding: 1px 6px; border-radius: 4px;
+        font-size: 11px; font-weight: 600;
+      }
+
+      .popup-score-bar { margin-top: 8px; padding-top: 8px; border-top: 1px solid #30363d; }
+      .score-bar-bg {
+        width: 100%; height: 6px; background: #21262d;
+        border-radius: 3px; overflow: hidden; margin-top: 4px;
+      }
+      .score-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+
+      .popup-links {
+        margin-top: 8px; padding-top: 8px; border-top: 1px solid #30363d;
+        font-size: 11px;
+      }
+      .popup-links a { color: #58a6ff; text-decoration: none; }
+      .popup-links a:hover { text-decoration: underline; }
 
       /* ── Legend ── */
       .legend {
-        background: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 8px;
-        padding: 10px 14px;
-        font-size: 12px;
-        color: #e6edf3;
-        min-width: 150px;
+        background: #161b22; border: 1px solid #30363d;
+        border-radius: 8px; padding: 10px 14px; font-size: 12px;
+        color: #e6edf3; min-width: 180px;
       }
-
       .legend-title {
-        font-weight: 600;
-        margin-bottom: 8px;
-        color: #8b949e;
-        text-transform: uppercase;
-        font-size: 10px;
-        letter-spacing: 0.5px;
+        font-weight: 600; margin-bottom: 8px; color: #8b949e;
+        text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;
       }
-
       .legend-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 5px;
+        display: flex; align-items: center; gap: 8px;
+        margin-bottom: 5px; cursor: pointer; padding: 2px 4px;
+        border-radius: 4px; transition: background 0.15s;
       }
+      .legend-item:hover { background: #21262d; }
+      .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+      .legend-count { margin-left: auto; color: #8b949e; font-size: 11px; }
+      .legend-diamond { width: 12px; height: 12px; flex-shrink: 0; transform: rotate(45deg); border-radius: 2px; }
 
-      .legend-dot {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        flex-shrink: 0;
+      /* ── Cluster styles ── */
+      .marker-cluster-small { background-color: rgba(63,185,80,0.4) !important; }
+      .marker-cluster-small div { background-color: rgba(63,185,80,0.7) !important; color: #fff !important; font-weight: 600 !important; }
+      .marker-cluster-medium { background-color: rgba(210,153,34,0.4) !important; }
+      .marker-cluster-medium div { background-color: rgba(210,153,34,0.7) !important; color: #fff !important; font-weight: 600 !important; }
+      .marker-cluster-large { background-color: rgba(248,81,73,0.4) !important; }
+      .marker-cluster-large div { background-color: rgba(248,81,73,0.7) !important; color: #fff !important; font-weight: 600 !important; }
+
+      /* ── Side panel ── */
+      .side-panel {
+        position: fixed; top: 0; right: -420px; width: 420px; height: 100vh;
+        background: #161b22; border-left: 1px solid #30363d;
+        z-index: 2000; transition: right 0.3s ease; overflow-y: auto;
       }
+      .side-panel.open { right: 0; }
+      .side-panel-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 16px; border-bottom: 1px solid #30363d;
+        position: sticky; top: 0; background: #161b22; z-index: 1;
+      }
+      .side-panel-title { font-size: 16px; font-weight: 600; }
+      .side-panel-close {
+        background: none; border: none; color: #8b949e;
+        font-size: 20px; cursor: pointer; padding: 4px 8px;
+      }
+      .side-panel-close:hover { color: #e6edf3; }
+
+      .side-panel-tabs {
+        display: flex; border-bottom: 1px solid #30363d;
+        position: sticky; top: 57px; background: #161b22; z-index: 1;
+      }
+      .side-tab {
+        flex: 1; padding: 10px; text-align: center; font-size: 12px;
+        color: #8b949e; cursor: pointer; border-bottom: 2px solid transparent;
+        transition: all 0.15s; white-space: nowrap;
+      }
+      .side-tab:hover { color: #e6edf3; background: #21262d; }
+      .side-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+
+      .side-panel-content { padding: 12px 16px; }
+
+      .state-list { list-style: none; }
+      .state-item {
+        padding: 10px 12px; border-bottom: 1px solid #21262d;
+        display: flex; align-items: center; justify-content: space-between;
+        cursor: pointer; border-radius: 6px; transition: background 0.15s;
+        margin-bottom: 2px;
+      }
+      .state-item:hover { background: #21262d; }
+      .state-name { font-size: 13px; font-weight: 500; }
+      .state-meta { font-size: 11px; color: #8b949e; margin-top: 2px; }
+      .state-count { font-size: 16px; font-weight: 700; min-width: 32px; text-align: right; }
+
+      .tier-badge {
+        font-size: 10px; padding: 1px 5px; border-radius: 3px;
+        font-weight: 600; margin-left: 6px;
+      }
+      .tier-badge.t1 { background: #f8514922; color: #f85149; }
+      .tier-badge.t2 { background: #ff6b3522; color: #ff6b35; }
+      .tier-badge.t3 { background: #d2992222; color: #d29922; }
+      .tier-badge.t4 { background: #3fb95022; color: #3fb950; }
+
+      .threat-item {
+        padding: 10px 12px; border-bottom: 1px solid #21262d;
+        cursor: pointer; border-radius: 6px; transition: background 0.15s;
+        margin-bottom: 2px;
+      }
+      .threat-item:hover { background: #21262d; }
+      .threat-item-header {
+        display: flex; justify-content: space-between; align-items: center;
+      }
+      .threat-item-score { font-size: 18px; font-weight: 700; }
+      .threat-item-detail { font-size: 11px; color: #8b949e; margin-top: 4px; }
+
+      /* ── Vegetation panel items ── */
+      .veg-event-item {
+        padding: 10px 12px; border-bottom: 1px solid #21262d;
+        cursor: pointer; border-radius: 6px; transition: background 0.15s;
+        margin-bottom: 2px;
+      }
+      .veg-event-item:hover { background: #21262d; }
+      .veg-event-header {
+        display: flex; justify-content: space-between; align-items: center; gap: 8px;
+      }
+      .veg-class-badge {
+        font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 700;
+      }
+      .veg-class-badge.clearing { background: #da363322; color: #f85149; }
+      .veg-class-badge.burn_scar { background: #ff6b3522; color: #ff6b35; }
+      .veg-class-badge.regrowth { background: #3fb95022; color: #3fb950; }
+      .veg-event-meta { font-size: 11px; color: #8b949e; margin-top: 4px; }
+
+      .veg-zone-card {
+        padding: 12px; border: 1px solid #30363d; border-radius: 8px;
+        margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s;
+      }
+      .veg-zone-card:hover { border-color: #58a6ff; }
+      .veg-zone-card-header { display: flex; justify-content: space-between; align-items: center; }
+      .veg-zone-name { font-size: 13px; font-weight: 600; }
+      .veg-risk-pill {
+        font-size: 10px; padding: 2px 6px; border-radius: 99px; font-weight: 700;
+      }
+      .veg-risk-pill.critical { background: #f8514922; color: #f85149; }
+      .veg-risk-pill.high { background: #ff6b3522; color: #ff6b35; }
+      .veg-risk-pill.moderate { background: #d2992222; color: #d29922; }
+      .veg-zone-desc { font-size: 11px; color: #8b949e; margin-top: 4px; }
+      .veg-run-btn {
+        margin-top: 8px; background: #238636; color: #fff; border: 1px solid #2ea043;
+        border-radius: 6px; padding: 4px 10px; font-size: 11px; cursor: pointer;
+        font-weight: 600; transition: background 0.15s;
+      }
+      .veg-run-btn:hover { background: #2ea043; }
+      .veg-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+      .veg-empty {
+        text-align: center; padding: 30px 20px; color: #8b949e;
+      }
+      .veg-empty-icon { font-size: 32px; margin-bottom: 8px; }
 
       /* ── Loading overlay ── */
       #loading {
-        position: fixed;
-        inset: 0;
-        background: rgba(13, 17, 23, 0.85);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 9999;
-        flex-direction: column;
-        gap: 14px;
+        position: fixed; inset: 0; background: rgba(13,17,23,0.85);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 9999; flex-direction: column; gap: 14px;
+        transition: opacity 0.3s ease;
       }
-
+      #loading.hidden { opacity: 0; pointer-events: none; }
       .spinner {
-        width: 36px;
-        height: 36px;
-        border: 3px solid #30363d;
-        border-top-color: #f85149;
-        border-radius: 50%;
+        width: 36px; height: 36px; border: 3px solid #30363d;
+        border-top-color: #f85149; border-radius: 50%;
         animation: spin 0.8s linear infinite;
       }
-
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
-
-      #loading p {
-        font-size: 14px;
-        color: #8b949e;
-      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      #loading p { font-size: 14px; color: #8b949e; }
 
       /* ── Source badge ── */
       #source-note {
-        position: fixed;
-        bottom: 10px;
-        left: 10px;
-        background: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 6px;
-        padding: 4px 10px;
-        font-size: 11px;
-        color: #8b949e;
-        z-index: 1000;
+        position: fixed; bottom: 10px; left: 10px;
+        background: #161b22; border: 1px solid #30363d;
+        border-radius: 6px; padding: 4px 10px;
+        font-size: 11px; color: #8b949e; z-index: 1000;
+      }
+
+      /* ── Backdrop ── */
+      .backdrop {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+        z-index: 1999; display: none;
+      }
+      .backdrop.visible { display: block; }
+
+      /* ── Responsive ── */
+      @media (max-width: 768px) {
+        .stats-bar { gap: 10px; padding: 8px 12px; }
+        .stat-value { font-size: 14px; }
+        .threat-pills { display: none; }
+        .zone-stats { display: none; }
+        .controls { margin-left: 0; width: 100%; justify-content: flex-end; }
+        header { padding: 8px 12px; }
+        .divider { display: none; }
+        .side-panel { width: 100%; right: -100%; }
+        .component-pills { display: none; }
       }
     </style>
   </head>
   <body>
+    <!-- Loading -->
     <div id="loading">
       <div class="spinner"></div>
-      <p>Fetching satellite data...</p>
+      <p id="loading-text">Fetching satellite data from NASA FIRMS...</p>
     </div>
 
+    <!-- Alert banner -->
+    <div class="alert-banner" id="alert-banner">
+      <span>⚠️</span>
+      <span id="alert-text"></span>
+      <button class="alert-close" onclick="dismissAlert()">✕</button>
+    </div>
+
+    <!-- Header -->
     <header>
       <div class="header-left">
         <span class="logo">🦅</span>
         <div>
           <div class="header-title">EagleEye-Nigeria</div>
-          <div class="header-sub">Thermal Hotspot Intelligence — Phase 1</div>
+          <div class="header-sub">Satellite Intelligence — Real-Time Threat Monitoring</div>
         </div>
       </div>
-      <span class="status-pill" id="status-pill">● LIVE</span>
+      <div class="header-right">
+        <div class="component-pills" id="component-pills">
+          <span class="comp-pill" id="comp-firms" title="NASA FIRMS">🔥 FIRMS</span>
+          <span class="comp-pill" id="comp-sentinel" title="Sentinel-2 Vegetation">🌿 S2</span>
+          <span class="comp-pill" id="comp-acled" title="ACLED Conflict Data">⚔️ ACLED</span>
+        </div>
+        <span class="status-pill" id="status-pill">● LIVE</span>
+      </div>
     </header>
 
+    <!-- Stats bar -->
     <div class="stats-bar">
       <div class="stat">
         <span class="stat-label">Total Hotspots</span>
@@ -263,123 +399,1040 @@
       </div>
       <div class="divider"></div>
       <div class="stat">
-        <span class="stat-label">High Confidence</span>
-        <span class="stat-value high" id="stat-high">—</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Medium</span>
-        <span class="stat-value medium" id="stat-medium">—</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Low</span>
-        <span class="stat-value low" id="stat-low">—</span>
+        <span class="stat-label">Confidence</span>
+        <div class="confidence-values">
+          <span class="stat-value high" id="stat-high" title="High confidence">🔴 —</span>
+          <span class="stat-value medium" id="stat-medium" style="font-size:14px" title="Nominal">🟡 —</span>
+          <span class="stat-value low" id="stat-low" style="font-size:14px" title="Low">🟢 —</span>
+        </div>
       </div>
       <div class="divider"></div>
       <div class="stat">
-        <span class="stat-label">Last Updated</span>
-        <span class="stat-value" id="stat-updated" style="font-size: 13px"
-          >—</span
-        >
+        <span class="stat-label">Threat Priority</span>
+        <div class="threat-pills" id="threat-pills">
+          <span class="threat-pill critical" onclick="filterByPriority('CRITICAL')">
+            <span class="pill-count" id="pill-critical">—</span> CRITICAL
+          </span>
+          <span class="threat-pill high-pri" onclick="filterByPriority('HIGH')">
+            <span class="pill-count" id="pill-high">—</span> HIGH
+          </span>
+          <span class="threat-pill elevated" onclick="filterByPriority('ELEVATED')">
+            <span class="pill-count" id="pill-elevated">—</span> ELEVATED
+          </span>
+          <span class="threat-pill monitor" onclick="filterByPriority('MONITOR')">
+            <span class="pill-count" id="pill-monitor">—</span> MONITOR
+          </span>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="stat">
+        <span class="stat-label">Top Score</span>
+        <span class="stat-value high" id="stat-top-score">—</span>
+      </div>
+      <div class="divider"></div>
+      <div class="stat">
+        <span class="stat-label">Veg Changes</span>
+        <span class="stat-value" id="stat-veg-events" style="font-size:14px;color:#58a6ff" title="Vegetation change events">🌿 —</span>
+      </div>
+      <div class="divider"></div>
+      <div class="zone-stats" id="zone-stats"></div>
+      <div class="divider"></div>
+      <div class="stat">
+        <span class="stat-label">Updated</span>
+        <span class="stat-value" id="stat-updated" style="font-size:13px">—</span>
       </div>
 
+      <!-- Controls -->
       <div class="controls">
-        <label>Days:</label>
-        <select id="days-select">
-          <option value="1">Last 24h</option>
-          <option value="2">Last 2 days</option>
-          <option value="3">Last 3 days</option>
-          <option value="7">Last 7 days</option>
+        <label for="days-select">Days:</label>
+        <select id="days-select" title="Select number of days">
+          <option value="1">24h</option>
+          <option value="2">2 days</option>
+          <option value="3">3 days</option>
+          <option value="5">5 days</option>
+          <option value="7">7 days</option>
+          <option value="10">10 days</option>
         </select>
-        <button class="refresh-btn" onclick="loadHotspots()">↻ Refresh</button>
+
+        <label for="confidence-filter">Filter:</label>
+        <select id="confidence-filter" title="Filter hotspots">
+          <option value="all">All</option>
+          <option value="H">High Conf.</option>
+          <option value="HN">High + Med</option>
+          <option value="L">Low only</option>
+          <option value="critical">CRITICAL</option>
+          <option value="high+">HIGH+</option>
+        </select>
+
+        <button class="filter-btn active" id="cluster-toggle" onclick="toggleClustering()" title="Toggle clustering">🔵 Clusters</button>
+        <button class="filter-btn" id="veg-toggle" onclick="toggleVegetationLayer()" title="Toggle vegetation changes layer">🌿 Veg</button>
+        <button class="filter-btn" id="zones-toggle" onclick="toggleMonitoringZones()" title="Toggle monitoring zone overlays">📐 Zones</button>
+        <button class="filter-btn" id="panel-toggle" onclick="toggleSidePanel()" title="Intelligence panel">📊 Intel</button>
+        <button class="refresh-btn" id="refresh-btn" onclick="loadAllData()">↻ Refresh</button>
       </div>
     </div>
 
+    <!-- Map -->
     <div id="map"></div>
     <div id="source-note">Source: NASA FIRMS · VIIRS SNPP NRT</div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script>
-      // ── Map Init ──────────────────────────────────────────────
-      const map = L.map('map', { zoomControl: true }).setView([9.5, 8.0], 6);
+    <!-- Backdrop for side panel -->
+    <div class="backdrop" id="backdrop" onclick="toggleSidePanel()"></div>
 
-      L.tileLayer(
+    <!-- Side panel -->
+    <div class="side-panel" id="side-panel">
+      <div class="side-panel-header">
+        <span class="side-panel-title">📊 Intelligence Panel</span>
+        <button class="side-panel-close" onclick="toggleSidePanel()">✕</button>
+      </div>
+      <div class="side-panel-tabs">
+        <div class="side-tab active" onclick="switchTab('states', this)">🏛️ States</div>
+        <div class="side-tab" onclick="switchTab('threats', this)">🎯 Threats</div>
+        <div class="side-tab" onclick="switchTab('vegetation', this)">🌿 Veg</div>
+        <div class="side-tab" onclick="switchTab('tiers', this)">⚔️ Tiers</div>
+      </div>
+      <div class="side-panel-content" id="panel-content">
+        <!-- Dynamic -->
+      </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script>
+      // ════════════════════════════════════════════════════════
+      //  STATE
+      // ════════════════════════════════════════════════════════
+      let allFeatures = [];
+      let summaryData = {};
+      let useClustering = true;
+      let hotspotLayer = null;
+      let clusterLayer = null;
+      let currentTab = 'states';
+
+      // Vegetation state
+      let vegEvents = [];
+      let vegLayerGroup = null;
+      let vegLayerVisible = false;
+      let monitoringZones = [];
+      let zonesLayerGroup = null;
+      let zonesVisible = false;
+      let sentinel2Available = false;
+
+      // ════════════════════════════════════════════════════════
+      //  MAP SETUP
+      // ════════════════════════════════════════════════════════
+      const map = L.map('map', { zoomControl: true, preferCanvas: true })
+        .setView([9.5, 8.0], 6);
+
+      const darkTiles = L.tileLayer(
         'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-        {
-          attribution: '© OpenStreetMap © CARTO',
-          maxZoom: 18,
-        },
+        { attribution: '© OpenStreetMap © CARTO', maxZoom: 18 }
+      );
+      const satelliteTiles = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        { attribution: '© Esri', maxZoom: 18 }
+      );
+
+      darkTiles.addTo(map);
+      L.control.layers(
+        { '🌑 Dark': darkTiles, '🛰️ Satellite': satelliteTiles },
+        {}, { position: 'topright' }
       ).addTo(map);
 
-      // ── Red Zone Overlays ─────────────────────────────────────
+      // Red zones
       const redZones = [
-        {
-          name: 'Northwest Corridor',
-          bounds: [
-            [11.0, 4.0],
-            [14.0, 9.0],
-          ],
-        },
-        {
-          name: 'Northeast Corridor',
-          bounds: [
-            [10.0, 11.0],
-            [14.0, 15.0],
-          ],
-        },
-        {
-          name: 'North Central',
-          bounds: [
-            [8.0, 5.0],
-            [11.0, 10.0],
-          ],
-        },
+        { name: 'Northwest Corridor', bounds: [[11.0,4.0],[14.0,9.0]], color: '#f85149' },
+        { name: 'Northeast Corridor', bounds: [[10.0,11.0],[14.0,15.0]], color: '#f85149' },
+        { name: 'North Central',      bounds: [[8.0,5.0],[11.0,10.0]],  color: '#d29922' },
       ];
-
-      redZones.forEach((zone) => {
-        L.rectangle(zone.bounds, {
-          color: '#f85149',
-          weight: 1,
-          fillOpacity: 0.05,
-          dashArray: '4 4',
-        })
-          .addTo(map)
-          .bindTooltip(zone.name, { sticky: true });
+      redZones.forEach(z => {
+        L.rectangle(z.bounds, { color: z.color, weight: 1.5, fillOpacity: 0.04, dashArray: '6 4' })
+          .addTo(map).bindTooltip(z.name, { sticky: true });
       });
+      L.rectangle([[4.0,2.7],[14.0,15.0]], { color: '#30363d', weight: 1, fillOpacity: 0, dashArray: '2 4' }).addTo(map);
 
-      // ── Legend ────────────────────────────────────────────────
+      // Legend
       const legend = L.control({ position: 'bottomright' });
       legend.onAdd = () => {
         const div = L.DomUtil.create('div', 'legend');
         div.innerHTML = `
-      <div class="legend-title">Confidence</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#f85149"></div> High</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#d29922"></div> Medium</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div> Low</div>
-      <div style="margin-top:8px" class="legend-title">Red Zones</div>
-      <div class="legend-item"><div style="width:12px;height:2px;border-top:1px dashed #f85149"></div> Monitored corridor</div>
-    `;
+          <div class="legend-title">Threat Priority</div>
+          <div class="legend-item" onclick="filterByPriority('CRITICAL')">
+            <div class="legend-dot" style="background:#f85149"></div><span>CRITICAL</span>
+            <span class="legend-count" id="leg-critical">0</span>
+          </div>
+          <div class="legend-item" onclick="filterByPriority('HIGH')">
+            <div class="legend-dot" style="background:#ff6b35"></div><span>HIGH</span>
+            <span class="legend-count" id="leg-high">0</span>
+          </div>
+          <div class="legend-item" onclick="filterByPriority('ELEVATED')">
+            <div class="legend-dot" style="background:#d29922"></div><span>ELEVATED</span>
+            <span class="legend-count" id="leg-elevated">0</span>
+          </div>
+          <div class="legend-item" onclick="filterByPriority('MONITOR')">
+            <div class="legend-dot" style="background:#3fb950"></div><span>MONITOR</span>
+            <span class="legend-count" id="leg-monitor">0</span>
+          </div>
+          <div style="margin-top:10px" class="legend-title">Vegetation Changes</div>
+          <div class="legend-item">
+            <div class="legend-diamond" style="background:#f85149"></div><span>Clearing</span>
+            <span class="legend-count" id="leg-clearing">0</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-diamond" style="background:#ff6b35"></div><span>Burn Scar</span>
+            <span class="legend-count" id="leg-burn">0</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-diamond" style="background:#3fb950"></div><span>Regrowth</span>
+            <span class="legend-count" id="leg-regrowth">0</span>
+          </div>
+          <div style="margin-top:10px" class="legend-title">Zones</div>
+          <div class="legend-item"><div style="width:14px;height:0;border-top:2px dashed #f85149"></div><span>Red Zone</span></div>
+          <div class="legend-item"><div style="width:14px;height:0;border-top:2px dashed #d29922"></div><span>Watch Zone</span></div>
+          <div class="legend-item"><div style="width:14px;height:0;border-top:2px solid #58a6ff"></div><span>Monitoring Zone</span></div>
+          <div style="margin-top:8px;font-size:10px;color:#8b949e">
+            <kbd style="background:#21262d;padding:1px 4px;border-radius:3px">R</kbd> refresh ·
+            <kbd style="background:#21262d;padding:1px 4px;border-radius:3px">C</kbd> clusters ·
+            <kbd style="background:#21262d;padding:1px 4px;border-radius:3px">V</kbd> vegetation
+          </div>
+        `;
         return div;
       };
       legend.addTo(map);
 
-      // ── Hotspot Layer ─────────────────────────────────────────
-      let hotspotLayer = L.layerGroup().addTo(map);
+      // ════════════════════════════════════════════════════════
+      //  HELPERS
+      // ════════════════════════════════════════════════════════
+      function priorityColor(p) {
+        return p === 'CRITICAL' ? '#f85149' : p === 'HIGH' ? '#ff6b35' : p === 'ELEVATED' ? '#d29922' : '#3fb950';
+      }
+      function confidenceColor(c) { return c === 'H' ? '#f85149' : c === 'N' ? '#d29922' : '#3fb950'; }
+      function confidenceLabel(c) { return c === 'H' ? 'High' : c === 'N' ? 'Nominal' : 'Low'; }
+      function zoneColor(z) {
+        if (!z) return '#8b949e';
+        return (z.includes('Northwest') || z.includes('Northeast')) ? '#f85149' : z.includes('North Central') ? '#d29922' : '#8b949e';
+      }
+      function scoreColor(s) { return s >= 80 ? '#f85149' : s >= 60 ? '#ff6b35' : s >= 40 ? '#d29922' : '#3fb950'; }
+      function vegClassColor(c) { return c === 'clearing' ? '#f85149' : c === 'burn_scar' ? '#ff6b35' : '#3fb950'; }
+      function vegSeverityColor(s) { return s === 'critical' ? '#f85149' : s === 'high' ? '#ff6b35' : s === 'moderate' ? '#d29922' : '#3fb950'; }
+      function tierBadge(t) {
+        if (!t) return '';
+        if (t.includes('Tier 1')) return '<span class="tier-badge t1">T1</span>';
+        if (t.includes('Tier 2')) return '<span class="tier-badge t2">T2</span>';
+        if (t.includes('Tier 3')) return '<span class="tier-badge t3">T3</span>';
+        return '<span class="tier-badge t4">T4</span>';
+      }
+      function formatTime(t) { return (!t || t.length < 4) ? (t || '') : t.slice(0,2)+':'+t.slice(2)+' UTC'; }
+      function setStatus(s) {
+        const pill = document.getElementById('status-pill');
+        pill.className = 'status-pill';
+        if (s === 'live') pill.textContent = '● LIVE';
+        else if (s === 'loading') { pill.textContent = '● LOADING'; pill.classList.add('loading'); }
+        else if (s === 'error') { pill.textContent = '● ERROR'; pill.classList.add('error'); }
+        else if (s === 'mock') { pill.textContent = '● MOCK DATA'; pill.classList.add('loading'); }
+      }
+      function dismissAlert() { document.getElementById('alert-banner').classList.remove('visible'); }
 
-      function confidenceColor(conf) {
-        if (conf === 'H') return '#f85149';
-        if (conf === 'N') return '#d29922';
-        return '#3fb950';
+      function el(id) { return document.getElementById(id); }
+
+      // ════════════════════════════════════════════════════════
+      //  HOTSPOT MARKER
+      // ════════════════════════════════════════════════════════
+      function createHotspotMarker(f) {
+        const [lon, lat] = f.geometry.coordinates;
+        const p = f.properties;
+        const priority = p.priority || 'MONITOR';
+        const color = priorityColor(priority);
+        const score = p.threat_score || 0;
+        const sc = scoreColor(score);
+        const cc = confidenceColor(p.confidence);
+
+        const radius = priority === 'CRITICAL' ? 9 : priority === 'HIGH' ? 7 : priority === 'ELEVATED' ? 6 : 4;
+        const weight = priority === 'CRITICAL' ? 2.5 : priority === 'HIGH' ? 1.5 : 1;
+
+        const marker = L.circleMarker([lat, lon], {
+          radius, fillColor: color, color, weight, opacity: 0.9, fillOpacity: 0.75,
+        });
+
+        marker.bindPopup(`
+          <div style="font-family:'Segoe UI',sans-serif;min-width:240px">
+            <div class="popup-header">
+              🔥 Thermal Detection
+              <span class="popup-badge" style="background:${color}22;color:${color};border:1px solid ${color}55">${priority}</span>
+            </div>
+            <table class="popup-table">
+              <tr><td>State</td><td><strong>${p.state||'—'}</strong> ${tierBadge(p.threat_tier)}</td></tr>
+              <tr><td>Confidence</td><td style="color:${cc};font-weight:600">${confidenceLabel(p.confidence)}</td></tr>
+              <tr><td>Brightness</td><td><strong>${p.brightness}</strong> K</td></tr>
+              <tr><td>FRP</td><td><strong>${p.frp}</strong> MW</td></tr>
+              <tr><td>Acquired</td><td>${p.acq_date} · ${formatTime(p.acq_time)}</td></tr>
+              <tr><td>Day/Night</td><td>${p.daynight==='N'?'🌙 Night':p.daynight==='D'?'☀️ Day':p.daynight||'—'}</td></tr>
+              <tr><td>Zone</td><td>
+                <span class="popup-zone-badge" style="background:${zoneColor(p.red_zone)}15;color:${zoneColor(p.red_zone)};border:1px solid ${zoneColor(p.red_zone)}40">${p.red_zone||'—'}</span>
+              </td></tr>
+              <tr><td>Coords</td><td>${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E</td></tr>
+            </table>
+            <div class="popup-score-bar">
+              <div style="display:flex;justify-content:space-between;font-size:11px">
+                <span style="color:#8b949e">Threat Score</span>
+                <span style="color:${sc};font-weight:700">${score} / 100</span>
+              </div>
+              <div class="score-bar-bg"><div class="score-bar-fill" style="width:${score}%;background:${sc}"></div></div>
+            </div>
+            <div class="popup-links">
+              <a href="https://www.google.com/maps/@${lat},${lon},15z" target="_blank" rel="noopener">📍 Maps</a>
+              <span style="color:#30363d;margin:0 6px">|</span>
+              <a href="/api/v1/hotspots/states?state=${encodeURIComponent(p.state||'')}" target="_blank">📊 State</a>
+            </div>
+          </div>
+        `, { maxWidth: 300 });
+
+        return marker;
       }
 
-      function confidenceLabel(conf) {
-        if (conf === 'H') return 'High';
-        if (conf === 'N') return 'Medium';
-        return 'Low';
+      // ════════════════════════════════════════════════════════
+      //  VEGETATION CHANGE MARKER
+      // ════════════════════════════════════════════════════════
+      function createVegMarker(evt) {
+        const lat = evt.latitude;
+        const lon = evt.longitude;
+        const color = vegClassColor(evt.classification);
+        const sevColor = vegSeverityColor(evt.severity);
+
+        // Diamond shape via rotated square div icon
+        const size = evt.severity === 'critical' ? 16 : evt.severity === 'high' ? 13 : 10;
+        const icon = L.divIcon({
+          className: '',
+          html: `<div style="
+            width:${size}px; height:${size}px;
+            background:${color}; border: 2px solid ${color};
+            transform: rotate(45deg);
+            border-radius: 2px;
+            opacity: 0.85;
+            box-shadow: 0 0 6px ${color}66;
+          "></div>`,
+          iconSize: [size, size],
+          iconAnchor: [size/2, size/2],
+        });
+
+        const marker = L.marker([lat, lon], { icon });
+
+        const confPct = (evt.confidence * 100).toFixed(0);
+        const changeSign = evt.mean_change > 0 ? '+' : '';
+
+        marker.bindPopup(`
+          <div style="font-family:'Segoe UI',sans-serif;min-width:240px">
+            <div class="popup-header">
+              🌿 Vegetation Change
+              <span class="popup-badge" style="background:${sevColor}22;color:${sevColor};border:1px solid ${sevColor}55">${evt.severity.toUpperCase()}</span>
+            </div>
+            <table class="popup-table">
+              <tr><td>Type</td><td>
+                <span class="veg-class-badge ${evt.classification}" style="background:${color}22;color:${color};border:1px solid ${color}55">${evt.classification.replace('_',' ')}</span>
+              </td></tr>
+              <tr><td>Index</td><td>${evt.index_used.toUpperCase()}</td></tr>
+              <tr><td>Mean Δ</td><td style="color:${color};font-weight:600">${changeSign}${evt.mean_change.toFixed(4)}</td></tr>
+              <tr><td>Max Δ</td><td>${changeSign.replace('+','')}${evt.max_change.toFixed(4)}</td></tr>
+              <tr><td>Area</td><td><strong>${evt.area_hectares}</strong> ha (${evt.area_pixels} px)</td></tr>
+              <tr><td>Before</td><td>${evt.date_before}</td></tr>
+              <tr><td>After</td><td>${evt.date_after}</td></tr>
+              <tr><td>Zone</td><td>${evt.vegetation_zone}</td></tr>
+              <tr><td>Coords</td><td>${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E</td></tr>
+            </table>
+            <div class="popup-score-bar">
+              <div style="display:flex;justify-content:space-between;font-size:11px">
+                <span style="color:#8b949e">Confidence</span>
+                <span style="color:${sevColor};font-weight:700">${confPct}%</span>
+              </div>
+              <div class="score-bar-bg"><div class="score-bar-fill" style="width:${confPct}%;background:${sevColor}"></div></div>
+            </div>
+            ${evt.thermal_correlation ? `<div style="margin-top:6px;font-size:11px;color:#d29922">🔥 ${evt.nearby_hotspots} nearby thermal hotspot(s)</div>` : ''}
+            ${evt.conflict_correlation ? `<div style="margin-top:4px;font-size:11px;color:#f85149">⚔️ ${evt.nearby_conflicts} nearby conflict event(s) (${evt.nearby_fatalities} fatalities)</div>` : ''}
+            <div class="popup-links">
+              <a href="https://www.google.com/maps/@${lat},${lon},14z" target="_blank" rel="noopener">📍 Maps</a>
+              <span style="color:#30363d;margin:0 6px">|</span>
+              <a href="/api/v1/sentinel2/events?min_confidence=${Math.max(evt.confidence-0.1,0).toFixed(1)}" target="_blank">🌿 Similar</a>
+            </div>
+          </div>
+        `, { maxWidth: 320 });
+
+        return marker;
       }
 
+      // ════════════════════════════════════════════════════════
+      //  RENDER HOTSPOTS
+      // ════════════════════════════════════════════════════════
+      function renderHotspots(features) {
+        if (hotspotLayer) { map.removeLayer(hotspotLayer); hotspotLayer = null; }
+        if (clusterLayer) { map.removeLayer(clusterLayer); clusterLayer = null; }
+
+        if (useClustering) {
+          clusterLayer = L.markerClusterGroup({
+            maxClusterRadius: 40, spiderfyOnMaxZoom: true, showCoverageOnHover: false,
+            iconCreateFunction: cluster => {
+              const n = cluster.getChildCount();
+              const sz = n > 50 ? 'large' : n > 20 ? 'medium' : 'small';
+              return L.divIcon({ html: `<div>${n}</div>`, className: `marker-cluster marker-cluster-${sz}`, iconSize: L.point(40,40) });
+            }
+          });
+          features.forEach(f => clusterLayer.addLayer(createHotspotMarker(f)));
+          map.addLayer(clusterLayer);
+        } else {
+          hotspotLayer = L.layerGroup();
+          features.forEach(f => hotspotLayer.addLayer(createHotspotMarker(f)));
+          hotspotLayer.addTo(map);
+        }
+
+        // Update legend counts
+        const counts = { CRITICAL:0, HIGH:0, ELEVATED:0, MONITOR:0 };
+        features.forEach(f => { counts[f.properties.priority || 'MONITOR']++; });
+        if (el('leg-critical')) el('leg-critical').textContent = counts.CRITICAL;
+        if (el('leg-high')) el('leg-high').textContent = counts.HIGH;
+        if (el('leg-elevated')) el('leg-elevated').textContent = counts.ELEVATED;
+        if (el('leg-monitor')) el('leg-monitor').textContent = counts.MONITOR;
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  RENDER VEGETATION LAYER
+      // ════════════════════════════════════════════════════════
+      function renderVegetationLayer() {
+        if (vegLayerGroup) { map.removeLayer(vegLayerGroup); vegLayerGroup = null; }
+        if (!vegLayerVisible || vegEvents.length === 0) return;
+
+        vegLayerGroup = L.layerGroup();
+        vegEvents.forEach(evt => vegLayerGroup.addLayer(createVegMarker(evt)));
+        vegLayerGroup.addTo(map);
+
+        // Update legend
+        const cls = { clearing: 0, burn_scar: 0, regrowth: 0 };
+        vegEvents.forEach(e => { if (cls[e.classification] !== undefined) cls[e.classification]++; });
+        if (el('leg-clearing')) el('leg-clearing').textContent = cls.clearing;
+        if (el('leg-burn')) el('leg-burn').textContent = cls.burn_scar;
+        if (el('leg-regrowth')) el('leg-regrowth').textContent = cls.regrowth;
+      }
+
+      function toggleVegetationLayer() {
+        vegLayerVisible = !vegLayerVisible;
+        el('veg-toggle').classList.toggle('veg-active', vegLayerVisible);
+        el('veg-toggle').classList.toggle('active', false);
+        if (vegLayerVisible && vegEvents.length === 0) {
+          loadVegetationEvents();
+        } else {
+          renderVegetationLayer();
+        }
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  MONITORING ZONES OVERLAY
+      // ════════════════════════════════════════════════════════
+      function renderMonitoringZones() {
+        if (zonesLayerGroup) { map.removeLayer(zonesLayerGroup); zonesLayerGroup = null; }
+        if (!zonesVisible || monitoringZones.length === 0) return;
+
+        zonesLayerGroup = L.layerGroup();
+        monitoringZones.forEach(z => {
+          const [west, south, east, north] = z.bbox;
+          const color = z.risk_level === 'critical' ? '#f85149' : z.risk_level === 'high' ? '#ff6b35' : '#d29922';
+          const rect = L.rectangle([[south, west], [north, east]], {
+            color: '#58a6ff', weight: 2, fillColor: color,
+            fillOpacity: 0.08, dashArray: '8 4',
+          });
+          rect.bindTooltip(`<strong>${z.name}</strong><br><span style="color:${color}">${z.risk_level.toUpperCase()}</span> — ${z.description}`, {
+            sticky: true, className: '',
+          });
+          zonesLayerGroup.addLayer(rect);
+        });
+        zonesLayerGroup.addTo(map);
+      }
+
+      function toggleMonitoringZones() {
+        zonesVisible = !zonesVisible;
+        el('zones-toggle').classList.toggle('active', zonesVisible);
+        if (zonesVisible && monitoringZones.length === 0) {
+          loadMonitoringZones();
+        } else {
+          renderMonitoringZones();
+        }
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  FILTERING
+      // ════════════════════════════════════════════════════════
+      function getFilteredFeatures() {
+        const f = el('confidence-filter').value;
+        if (f === 'all') return allFeatures;
+        if (f === 'H') return allFeatures.filter(x => x.properties.confidence === 'H');
+        if (f === 'HN') return allFeatures.filter(x => ['H','N'].includes(x.properties.confidence));
+        if (f === 'L') return allFeatures.filter(x => x.properties.confidence === 'L');
+        if (f === 'critical') return allFeatures.filter(x => x.properties.priority === 'CRITICAL');
+        if (f === 'high+') return allFeatures.filter(x => ['CRITICAL','HIGH'].includes(x.properties.priority));
+        return allFeatures;
+      }
+      function applyFilter() { renderHotspots(getFilteredFeatures()); }
+      function filterByPriority(level) {
+        el('confidence-filter').value = level === 'CRITICAL' ? 'critical' : level === 'HIGH' ? 'high+' : 'all';
+        applyFilter();
+      }
+      el('confidence-filter').addEventListener('change', applyFilter);
+
+      function toggleClustering() {
+        useClustering = !useClustering;
+        const btn = el('cluster-toggle');
+        btn.classList.toggle('active', useClustering);
+        btn.textContent = useClustering ? '🔵 Clusters' : '⚫ Points';
+        applyFilter();
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  ZONE STATS
+      // ════════════════════════════════════════════════════════
+      function updateZoneStats(features) {
+        const zoneCounts = {};
+        features.forEach(f => {
+          const zone = f.properties.red_zone || 'Other';
+          zoneCounts[zone] = (zoneCounts[zone] || 0) + 1;
+        });
+        const container = el('zone-stats');
+        container.innerHTML = '';
+        Object.entries(zoneCounts)
+          .filter(([z]) => z !== 'Other')
+          .sort((a,b) => b[1] - a[1])
+          .forEach(([zone, count]) => {
+            const badge = document.createElement('div');
+            badge.className = 'zone-badge';
+            badge.innerHTML = `<span style="color:${zoneColor(zone)}">■</span> ${zone}: <span class="zone-count">${count}</span>`;
+            container.appendChild(badge);
+          });
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  SIDE PANEL
+      // ════════════════════════════════════════════════════════
+      function toggleSidePanel() {
+        const panel = el('side-panel');
+        const backdrop = el('backdrop');
+        const isOpen = panel.classList.toggle('open');
+        backdrop.classList.toggle('visible', isOpen);
+        el('panel-toggle').classList.toggle('active', isOpen);
+        if (isOpen) updatePanelContent();
+      }
+
+      function switchTab(tab, tabEl) {
+        currentTab = tab;
+        document.querySelectorAll('.side-tab').forEach(t => t.classList.remove('active'));
+        tabEl.classList.add('active');
+        updatePanelContent();
+      }
+
+      function updatePanelContent() {
+        const c = el('panel-content');
+        if (currentTab === 'states') renderStatesPanel(c);
+        else if (currentTab === 'threats') renderThreatsPanel(c);
+        else if (currentTab === 'vegetation') renderVegetationPanel(c);
+        else if (currentTab === 'tiers') renderTiersPanel(c);
+      }
+
+      function renderStatesPanel(container) {
+        const stateMap = {};
+        allFeatures.forEach(f => {
+          const s = f.properties.state || 'Unknown';
+          if (!stateMap[s]) stateMap[s] = { count:0, critical:0, maxScore:0, tier: f.properties.threat_tier || '', high:0 };
+          stateMap[s].count++;
+          if (f.properties.priority === 'CRITICAL') stateMap[s].critical++;
+          if (f.properties.confidence === 'H') stateMap[s].high++;
+          if ((f.properties.threat_score || 0) > stateMap[s].maxScore) stateMap[s].maxScore = f.properties.threat_score;
+        });
+        const sorted = Object.entries(stateMap).sort((a,b) => b[1].maxScore - a[1].maxScore);
+        container.innerHTML = `<ul class="state-list">${sorted.map(([name, d]) => `
+          <li class="state-item" onclick="zoomToState('${name.replace(/'/g,"\\'")}')">
+            <div>
+              <div class="state-name">${name} ${tierBadge(d.tier)}</div>
+              <div class="state-meta">
+                ${d.critical > 0 ? `🔴 ${d.critical} critical · ` : ''}${d.high > 0 ? `🟡 ${d.high} high conf · ` : ''}
+                Score: <strong style="color:${scoreColor(d.maxScore)}">${d.maxScore}</strong>
+              </div>
+            </div>
+            <div class="state-count" style="color:${scoreColor(d.maxScore)}">${d.count}</div>
+          </li>
+        `).join('')}</ul>`;
+      }
+
+      function renderThreatsPanel(container) {
+        const top = allFeatures
+          .filter(f => f.properties.threat_score > 0)
+          .sort((a,b) => (b.properties.threat_score||0) - (a.properties.threat_score||0))
+          .slice(0, 30);
+        container.innerHTML = top.map((f, i) => {
+          const p = f.properties;
+          const [lon, lat] = f.geometry.coordinates;
+          return `
+            <div class="threat-item" onclick="zoomTo(${lat},${lon})">
+              <div class="threat-item-header">
+                <span style="color:#8b949e;font-size:12px">#${i+1}</span>
+                <span class="threat-item-score" style="color:${scoreColor(p.threat_score)}">${p.threat_score}</span>
+                <span style="font-size:11px;padding:2px 6px;border-radius:4px;background:${priorityColor(p.priority)}22;color:${priorityColor(p.priority)};font-weight:600">${p.priority}</span>
+              </div>
+              <div class="threat-item-detail">📍 ${p.state||'—'} · ${p.red_zone||'—'} · ${confidenceLabel(p.confidence)} · ${p.acq_date}</div>
+            </div>`;
+        }).join('');
+      }
+
+      function renderTiersPanel(container) {
+        const tierMap = {};
+        allFeatures.forEach(f => {
+          const t = f.properties.threat_tier || 'Unknown';
+          if (!tierMap[t]) tierMap[t] = { count:0, critical:0, maxScore:0, states: new Set() };
+          tierMap[t].count++;
+          if (f.properties.priority === 'CRITICAL') tierMap[t].critical++;
+          if ((f.properties.threat_score||0) > tierMap[t].maxScore) tierMap[t].maxScore = f.properties.threat_score;
+          if (f.properties.state) tierMap[t].states.add(f.properties.state);
+        });
+        container.innerHTML = Object.entries(tierMap).sort((a,b) => b[1].maxScore - a[1].maxScore).map(([tier, d]) => `
+          <div style="padding:12px;border-bottom:1px solid #21262d">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <strong style="font-size:13px">${tier}</strong>
+              <span style="font-size:16px;font-weight:700;color:${scoreColor(d.maxScore)}">${d.count}</span>
+            </div>
+            <div style="font-size:11px;color:#8b949e;margin-top:4px">
+              ${d.critical>0?`🔴 ${d.critical} critical · `:''}Top: <strong style="color:${scoreColor(d.maxScore)}">${d.maxScore}</strong> · ${[...d.states].join(', ')}
+            </div>
+          </div>
+        `).join('');
+      }
+
+            // ════════════════════════════════════════════════════════
+      //  VEGETATION PANEL
+      // ════════════════════════════════════════════════════════
+      function renderVegetationPanel(container) {
+        // Section 1: Monitoring Zones with run buttons
+        let zonesHtml = '<div class="legend-title" style="margin-bottom:10px">MONITORING ZONES</div>';
+
+        if (monitoringZones.length === 0) {
+          zonesHtml += '<div style="font-size:12px;color:#8b949e;margin-bottom:16px">Loading zones...</div>';
+          loadMonitoringZones().then(() => {
+            if (currentTab === 'vegetation') renderVegetationPanel(container);
+          });
+        } else {
+          zonesHtml += monitoringZones.map(z => {
+            const riskClass = z.risk_level === 'critical' ? 'critical' : z.risk_level === 'high' ? 'high' : 'moderate';
+            const evtsInZone = vegEvents.filter(e => {
+              const [w,s,ea,n] = z.bbox;
+              return e.latitude >= s && e.latitude <= n && e.longitude >= w && e.longitude <= ea;
+            });
+            return `
+              <div class="veg-zone-card" onclick="zoomToBbox([${z.bbox}])">
+                <div class="veg-zone-card-header">
+                  <span class="veg-zone-name">${z.name}</span>
+                  <span class="veg-risk-pill ${riskClass}">${z.risk_level.toUpperCase()}</span>
+                </div>
+                <div class="veg-zone-desc">${z.description}</div>
+                ${evtsInZone.length > 0 ? `<div style="font-size:11px;color:#58a6ff;margin-top:4px">🌿 ${evtsInZone.length} change event(s) detected</div>` : ''}
+                <button class="veg-run-btn" onclick="event.stopPropagation(); runZoneAnalysis('${z.zone_id}', this)">
+                  ▶ Run Analysis
+                </button>
+              </div>
+            `;
+          }).join('');
+        }
+
+        // Section 2: Detected Events
+        let eventsHtml = '<div class="legend-title" style="margin-top:20px;margin-bottom:10px">DETECTED CHANGES</div>';
+
+        if (vegEvents.length === 0) {
+          eventsHtml += `
+            <div class="veg-empty">
+              <div class="veg-empty-icon">🌿</div>
+              <div style="font-size:13px;margin-bottom:6px">No vegetation changes loaded</div>
+              <div style="font-size:11px">
+                ${sentinel2Available
+                  ? 'Click <strong>▶ Run Analysis</strong> on a zone above, or enable the 🌿 Veg layer.'
+                  : 'Sentinel-2 credentials not configured. Set <code>COPERNICUS_USER</code> and <code>COPERNICUS_PASSWORD</code> in <code>.env</code>'
+                }
+              </div>
+            </div>
+          `;
+        } else {
+          // Summary stats
+          const clsCount = { clearing: 0, burn_scar: 0, regrowth: 0 };
+          const sevCount = { critical: 0, high: 0, moderate: 0, low: 0 };
+          vegEvents.forEach(e => {
+            if (clsCount[e.classification] !== undefined) clsCount[e.classification]++;
+            if (sevCount[e.severity] !== undefined) sevCount[e.severity]++;
+          });
+
+          eventsHtml += `
+            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+              <span class="veg-class-badge clearing" style="background:#f8514922;color:#f85149;border:1px solid #f8514944;padding:3px 8px">
+                🪓 ${clsCount.clearing} Clearings
+              </span>
+              <span class="veg-class-badge burn_scar" style="background:#ff6b3522;color:#ff6b35;border:1px solid #ff6b3544;padding:3px 8px">
+                🔥 ${clsCount.burn_scar} Burn Scars
+              </span>
+              <span class="veg-class-badge regrowth" style="background:#3fb95022;color:#3fb950;border:1px solid #3fb95044;padding:3px 8px">
+                🌱 ${clsCount.regrowth} Regrowth
+              </span>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+              ${sevCount.critical > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#f8514922;color:#f85149">● ${sevCount.critical} CRITICAL</span>` : ''}
+              ${sevCount.high > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#ff6b3522;color:#ff6b35">● ${sevCount.high} HIGH</span>` : ''}
+              ${sevCount.moderate > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#d2992222;color:#d29922">● ${sevCount.moderate} MODERATE</span>` : ''}
+              ${sevCount.low > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#3fb95022;color:#3fb950">● ${sevCount.low} LOW</span>` : ''}
+            </div>
+          `;
+
+          // Sort events: critical first, then by confidence
+          const sorted = [...vegEvents].sort((a, b) => {
+            const sevOrder = { critical: 0, high: 1, moderate: 2, low: 3 };
+            const sa = sevOrder[a.severity] ?? 4;
+            const sb = sevOrder[b.severity] ?? 4;
+            if (sa !== sb) return sa - sb;
+            return b.confidence - a.confidence;
+          });
+
+          eventsHtml += sorted.map((evt, i) => {
+            const cc = vegClassColor(evt.classification);
+            const sc = vegSeverityColor(evt.severity);
+            const confPct = (evt.confidence * 100).toFixed(0);
+            return `
+              <div class="veg-event-item" onclick="zoomTo(${evt.latitude},${evt.longitude})">
+                <div class="veg-event-header">
+                  <span style="color:#8b949e;font-size:11px">#${i + 1}</span>
+                  <span class="veg-class-badge ${evt.classification}" style="background:${cc}22;color:${cc};border:1px solid ${cc}55">
+                    ${evt.classification.replace('_', ' ')}
+                  </span>
+                  <span style="font-size:10px;padding:2px 5px;border-radius:4px;background:${sc}22;color:${sc};font-weight:700">
+                    ${evt.severity.toUpperCase()}
+                  </span>
+                  <span style="margin-left:auto;font-size:12px;font-weight:700;color:${sc}">
+                    ${confPct}%
+                  </span>
+                </div>
+                <div class="veg-event-meta">
+                  📍 ${evt.latitude.toFixed(3)}°N, ${evt.longitude.toFixed(3)}°E ·
+                  📐 ${evt.area_hectares} ha ·
+                  📅 ${evt.date_before} → ${evt.date_after}
+                  ${evt.thermal_correlation ? ' · 🔥 thermal' : ''}
+                  ${evt.conflict_correlation ? ' · ⚔️ conflict' : ''}
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+
+        // Section 3: Quick actions
+        let actionsHtml = `
+          <div class="legend-title" style="margin-top:20px;margin-bottom:10px">QUICK ACTIONS</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <button class="veg-run-btn" onclick="runAllZones(this)" style="width:100%;text-align:center"
+              ${sentinel2Available ? '' : 'disabled title="Sentinel-2 not configured"'}>
+              🌍 Analyse All Zones
+            </button>
+            <button class="veg-run-btn" style="width:100%;text-align:center;background:#21262d;border-color:#30363d;color:#e6edf3"
+              onclick="loadVegetationEvents()">
+              ↻ Refresh Events
+            </button>
+            <a href="/api/v1/sentinel2/events/geojson" target="_blank"
+              style="display:block;text-align:center;font-size:11px;color:#58a6ff;padding:6px;text-decoration:none">
+              📥 Export GeoJSON
+            </a>
+          </div>
+        `;
+
+        container.innerHTML = zonesHtml + eventsHtml + actionsHtml;
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  VEGETATION DATA LOADERS
+      // ════════════════════════════════════════════════════════
+      async function loadVegetationEvents() {
+        try {
+          const res = await fetch('/api/v1/sentinel2/events?limit=200');
+          if (!res.ok) {
+            console.warn('[Veg] Events endpoint returned', res.status);
+            return;
+          }
+          vegEvents = await res.json();
+          el('stat-veg-events').textContent = `🌿 ${vegEvents.length}`;
+          renderVegetationLayer();
+          if (currentTab === 'vegetation' && el('side-panel').classList.contains('open')) {
+            renderVegetationPanel(el('panel-content'));
+          }
+          console.log(`[EagleEye] Loaded ${vegEvents.length} vegetation change events`);
+        } catch (err) {
+          console.warn('[Veg] Failed to load events:', err);
+          el('stat-veg-events').textContent = '🌿 —';
+        }
+      }
+
+      async function loadMonitoringZones() {
+        try {
+          const res = await fetch('/api/v1/sentinel2/zones');
+          if (!res.ok) {
+            console.warn('[Veg] Zones endpoint returned', res.status);
+            return;
+          }
+          monitoringZones = await res.json();
+          renderMonitoringZones();
+          console.log(`[EagleEye] Loaded ${monitoringZones.length} monitoring zones`);
+        } catch (err) {
+          console.warn('[Veg] Failed to load zones:', err);
+        }
+      }
+
+      async function loadSentinel2Health() {
+        try {
+          const res = await fetch('/api/v1/sentinel2/health');
+          if (!res.ok) return;
+          const data = await res.json();
+          sentinel2Available = data.sentinel2_configured;
+
+          const pill = el('comp-sentinel');
+          if (sentinel2Available) {
+            pill.classList.add('active');
+            pill.classList.remove('inactive');
+            pill.title = `Sentinel-2 OK · ${data.cached_files} cached · ${data.monitoring_zones} zones`;
+          } else {
+            pill.classList.add('inactive');
+            pill.classList.remove('active');
+            pill.title = 'Sentinel-2 not configured — set COPERNICUS_USER/PASSWORD';
+          }
+        } catch (err) {
+          console.warn('[Veg] Health check failed:', err);
+          el('comp-sentinel').classList.add('inactive');
+        }
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  RUN ANALYSIS FROM DASHBOARD
+      // ════════════════════════════════════════════════════════
+      async function runZoneAnalysis(zoneId, btnEl) {
+        if (!sentinel2Available) {
+          alert('Sentinel-2 is not configured. Set COPERNICUS_USER and COPERNICUS_PASSWORD in .env');
+          return;
+        }
+
+        btnEl.disabled = true;
+        btnEl.textContent = '⏳ Analysing...';
+
+        try {
+          const res = await fetch('/api/v1/sentinel2/change-detection', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              zone_name: zoneId,
+              index: 'ndvi',
+              correlate_hotspots: true,
+              correlate_acled: false,
+            }),
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+          }
+
+          const job = await res.json();
+
+          btnEl.textContent = `✓ ${job.events_found} events`;
+          btnEl.style.background = '#1f3a1f';
+          btnEl.style.borderColor = '#238636';
+
+          // Refresh events to pick up new results
+          await loadVegetationEvents();
+
+          // Auto-enable veg layer if not visible
+          if (!vegLayerVisible && job.events_found > 0) {
+            vegLayerVisible = true;
+            el('veg-toggle').classList.add('veg-active');
+            renderVegetationLayer();
+          }
+
+          // Zoom to zone
+          const zone = monitoringZones.find(z => z.zone_id === zoneId);
+          if (zone) zoomToBbox(zone.bbox);
+
+          // Update panel
+          if (currentTab === 'vegetation') renderVegetationPanel(el('panel-content'));
+
+          console.log(`[EagleEye] Zone ${zoneId}: ${job.events_found} events detected`);
+
+          // Reset button after 3s
+          setTimeout(() => {
+            btnEl.disabled = false;
+            btnEl.textContent = '▶ Run Analysis';
+            btnEl.style.background = '';
+            btnEl.style.borderColor = '';
+          }, 3000);
+
+        } catch (err) {
+          console.error('[Veg] Analysis failed:', err);
+          btnEl.textContent = '✗ Failed';
+          btnEl.style.background = '#3a1f1f';
+          btnEl.style.borderColor = '#f85149';
+          btnEl.style.color = '#f85149';
+
+          setTimeout(() => {
+            btnEl.disabled = false;
+            btnEl.textContent = '▶ Run Analysis';
+            btnEl.style.background = '';
+            btnEl.style.borderColor = '';
+            btnEl.style.color = '';
+          }, 3000);
+        }
+      }
+
+      async function runAllZones(btnEl) {
+        if (!sentinel2Available) {
+          alert('Sentinel-2 is not configured.');
+          return;
+        }
+
+        btnEl.disabled = true;
+        btnEl.textContent = '⏳ Analysing all zones...';
+
+        try {
+          const res = await fetch('/api/v1/sentinel2/change-detection/all-zones', {
+            method: 'POST',
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+          }
+
+          const jobs = await res.json();
+          const totalEvents = jobs.reduce((sum, j) => sum + (j.events_found || 0), 0);
+          const completed = jobs.filter(j => j.status === 'completed').length;
+          const failed = jobs.filter(j => j.status === 'failed').length;
+
+          btnEl.textContent = `✓ ${completed} zones · ${totalEvents} events${failed > 0 ? ` · ${failed} failed` : ''}`;
+          btnEl.style.background = '#1f3a1f';
+
+          await loadVegetationEvents();
+
+          if (!vegLayerVisible && totalEvents > 0) {
+            vegLayerVisible = true;
+            el('veg-toggle').classList.add('veg-active');
+            renderVegetationLayer();
+          }
+
+          if (currentTab === 'vegetation') renderVegetationPanel(el('panel-content'));
+
+          setTimeout(() => {
+            btnEl.disabled = false;
+            btnEl.textContent = '🌍 Analyse All Zones';
+            btnEl.style.background = '';
+          }, 4000);
+
+        } catch (err) {
+          console.error('[Veg] All-zones analysis failed:', err);
+          btnEl.textContent = '✗ Failed';
+          btnEl.style.background = '#3a1f1f';
+          setTimeout(() => {
+            btnEl.disabled = false;
+            btnEl.textContent = '🌍 Analyse All Zones';
+            btnEl.style.background = '';
+          }, 3000);
+        }
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  NAVIGATION HELPERS
+      // ════════════════════════════════════════════════════════
+      function zoomToState(name) {
+        const sf = allFeatures.filter(f => f.properties.state === name);
+        if (sf.length === 0) return;
+        const lats = sf.map(f => f.geometry.coordinates[1]);
+        const lons = sf.map(f => f.geometry.coordinates[0]);
+        map.fitBounds([
+          [Math.min(...lats) - 0.3, Math.min(...lons) - 0.3],
+          [Math.max(...lats) + 0.3, Math.max(...lons) + 0.3],
+        ]);
+        el('confidence-filter').value = 'all';
+        applyFilter();
+      }
+
+      function zoomTo(lat, lon) {
+        map.setView([lat, lon], 12);
+      }
+
+      function zoomToBbox(bbox) {
+        const [west, south, east, north] = bbox;
+        map.fitBounds([[south, west], [north, east]]);
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  ALERTS
+      // ════════════════════════════════════════════════════════
+      function checkAlerts(features, summary) {
+        const critCount = summary.threat_breakdown?.critical || 0;
+        const banner = el('alert-banner');
+        const text = el('alert-text');
+
+        if (critCount > 0) {
+          const critFeatures = features.filter(f => f.properties.priority === 'CRITICAL');
+          const stateZones = {};
+          critFeatures.forEach(f => {
+            const key = f.properties.state || f.properties.red_zone || 'Unknown';
+            stateZones[key] = (stateZones[key] || 0) + 1;
+          });
+          const list = Object.entries(stateZones).sort((a,b) => b[1]-a[1]).slice(0,5)
+            .map(([z,c]) => `${z} (${c})`).join(', ');
+          text.textContent = `⚡ ${critCount} CRITICAL threats detected — ${list}`;
+          banner.classList.add('visible');
+        } else {
+          banner.classList.remove('visible');
+        }
+
+        // Also check for critical vegetation events
+        const critVeg = vegEvents.filter(e => e.severity === 'critical');
+        if (critVeg.length > 0 && critCount === 0) {
+          text.textContent = `🌿 ${critVeg.length} CRITICAL vegetation change(s) detected — possible encampment activity`;
+          banner.classList.add('visible');
+        }
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  HEALTH CHECK — COMPONENT PILLS
+      // ════════════════════════════════════════════════════════
+      async function loadHealthStatus() {
+        try {
+          const res = await fetch('/health');
+          if (!res.ok) return;
+          const data = await res.json();
+          const c = data.components || {};
+
+          // FIRMS
+          const firmsPill = el('comp-firms');
+          firmsPill.classList.toggle('active', c.firms_data === true);
+          firmsPill.classList.toggle('inactive', c.firms_data !== true);
+
+          // ACLED
+          const acledPill = el('comp-acled');
+          acledPill.classList.toggle('active', c.acled === true);
+          acledPill.classList.toggle('inactive', c.acled !== true);
+
+          // Sentinel-2 is handled by its own health endpoint
+        } catch (err) {
+          console.warn('[Health] Check failed:', err);
+        }
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  MAIN DATA LOADERS
+      // ════════════════════════════════════════════════════════
       async function loadHotspots() {
-        const days = document.getElementById('days-select').value;
-        document.getElementById('loading').style.display = 'flex';
+        const days = el('days-select').value;
+        const refreshBtn = el('refresh-btn');
+        const loadingEl = el('loading');
+
+        loadingEl.classList.remove('hidden');
+        loadingEl.style.display = 'flex';
+        el('loading-text').textContent = 'Fetching satellite data from NASA FIRMS...';
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = '⏳ Loading...';
+        setStatus('loading');
 
         try {
           const [geoRes, sumRes] = await Promise.all([
@@ -387,84 +1440,111 @@
             fetch(`/api/v1/hotspots/summary?days=${days}`),
           ]);
 
+          if (!geoRes.ok || !sumRes.ok) throw new Error(`API error ${geoRes.status}/${sumRes.status}`);
+
           const geo = await geoRes.json();
           const summary = await sumRes.json();
 
-          // Update stats
-          document.getElementById('stat-total').textContent =
-            summary.total ?? 0;
-          document.getElementById('stat-high').textContent =
-            summary.high_confidence ?? 0;
-          document.getElementById('stat-medium').textContent =
-            summary.medium_confidence ?? 0;
-          document.getElementById('stat-low').textContent =
-            summary.low_confidence ?? 0;
-          document.getElementById('stat-updated').textContent =
-            new Date().toLocaleTimeString();
+          allFeatures = geo.features || [];
+          summaryData = summary;
 
-          // Update source note
+          // Stats
+          el('stat-total').textContent = summary.total ?? 0;
+          el('stat-high').textContent = `🔴 ${summary.high_confidence ?? 0}`;
+          el('stat-medium').textContent = `🟡 ${summary.medium_confidence ?? 0}`;
+          el('stat-low').textContent = `🟢 ${summary.low_confidence ?? 0}`;
+          el('stat-updated').textContent = new Date().toLocaleTimeString();
+
+          // Threat pills
+          const tb = summary.threat_breakdown || {};
+          el('pill-critical').textContent = tb.critical ?? 0;
+          el('pill-high').textContent = tb.high ?? 0;
+          el('pill-elevated').textContent = tb.elevated ?? 0;
+          el('pill-monitor').textContent = tb.monitor ?? 0;
+
+          // Top score
+          el('stat-top-score').textContent = summary.top_threat_score ?? '—';
+
+          // Source
           const src = geo.metadata?.source || 'NASA FIRMS';
-          document.getElementById('source-note').textContent = `Source: ${src}`;
+          const sensor = geo.metadata?.sensor || 'VIIRS SNPP NRT';
+          const scored = geo.metadata?.scored ? ' · Scored' : '';
+          el('source-note').textContent =
+            `Source: ${src} · ${sensor} · ${allFeatures.length} detections${scored}` +
+            (vegEvents.length > 0 ? ` · ${vegEvents.length} veg changes` : '');
 
-          // Clear and redraw markers
-          hotspotLayer.clearLayers();
+          // Status
+          if (src.includes('MOCK')) setStatus('mock');
+          else setStatus('live');
 
-          geo.features.forEach((f) => {
-            const [lon, lat] = f.geometry.coordinates;
-            const p = f.properties;
-            const color = confidenceColor(p.confidence);
+          // Zone stats
+          updateZoneStats(allFeatures);
 
-            const marker = L.circleMarker([lat, lon], {
-              radius: p.confidence === 'H' ? 9 : p.confidence === 'N' ? 7 : 5,
-              fillColor: color,
-              color: color,
-              weight: 1,
-              opacity: 0.9,
-              fillOpacity: 0.75,
-            });
+          // Alerts
+          checkAlerts(allFeatures, summary);
 
-            marker.bindPopup(
-              `
-          <div style="font-family:'Segoe UI',sans-serif;min-width:180px">
-            <div style="font-weight:600;margin-bottom:6px;color:#e6edf3">
-              🔥 Thermal Detection
-            </div>
-            <table style="font-size:12px;width:100%;border-collapse:collapse">
-              <tr><td style="color:#8b949e;padding:2px 0">Confidence</td>
-                  <td style="color:${color};font-weight:600">${confidenceLabel(p.confidence)}</td></tr>
-              <tr><td style="color:#8b949e;padding:2px 0">Brightness</td>
-                  <td>${p.brightness} K</td></tr>
-              <tr><td style="color:#8b949e;padding:2px 0">FRP</td>
-                  <td>${p.frp} MW</td></tr>
-              <tr><td style="color:#8b949e;padding:2px 0">Date</td>
-                  <td>${p.acq_date} ${p.acq_time}</td></tr>
-              <tr><td style="color:#8b949e;padding:2px 0">Zone</td>
-                  <td>${p.red_zone}</td></tr>
-              <tr><td style="color:#8b949e;padding:2px 0">Coords</td>
-                  <td>${lat.toFixed(4)}, ${lon.toFixed(4)}</td></tr>
-            </table>
-          </div>
-        `,
-              { className: 'dark-popup' },
-            );
+          // Render
+          applyFilter();
 
-            hotspotLayer.addLayer(marker);
-          });
+          // Update side panel if open
+          if (el('side-panel').classList.contains('open')) updatePanelContent();
+
+          console.log(`[EagleEye] Loaded ${allFeatures.length} hotspots (${tb.critical||0} critical) for ${days} day(s)`);
+
         } catch (err) {
           console.error('Failed to load hotspots:', err);
-          document.getElementById('status-pill').textContent = '● ERROR';
-          document.getElementById('status-pill').style.background = '#3a1f1f';
-          document.getElementById('status-pill').style.color = '#f85149';
+          setStatus('error');
+          el('stat-total').textContent = 'ERR';
         } finally {
-          document.getElementById('loading').style.display = 'none';
+          loadingEl.classList.add('hidden');
+          setTimeout(() => { loadingEl.style.display = 'none'; }, 300);
+          refreshBtn.disabled = false;
+          refreshBtn.textContent = '↻ Refresh';
         }
       }
 
-      // Initial load
-      loadHotspots();
+      async function loadAllData() {
+        await Promise.all([
+          loadHotspots(),
+          loadVegetationEvents(),
+        ]);
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  EVENT LISTENERS
+      // ════════════════════════════════════════════════════════
+      el('days-select').addEventListener('change', loadHotspots);
+
+      document.addEventListener('keydown', e => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+        if (e.key === 'r' && !e.ctrlKey && !e.metaKey) loadAllData();
+        if (e.key === 'c' && !e.ctrlKey && !e.metaKey) toggleClustering();
+        if (e.key === 'v' && !e.ctrlKey && !e.metaKey) toggleVegetationLayer();
+        if (e.key === 'z' && !e.ctrlKey && !e.metaKey) toggleMonitoringZones();
+        if (e.key === 'i' && !e.ctrlKey && !e.metaKey) toggleSidePanel();
+        if (e.key === 'Escape') {
+          if (el('side-panel').classList.contains('open')) toggleSidePanel();
+        }
+      });
+
+      // ════════════════════════════════════════════════════════
+      //  INIT
+      // ════════════════════════════════════════════════════════
+      (async function init() {
+        // Load health status and zones in parallel with hotspots
+        await Promise.all([
+          loadHotspots(),
+          loadHealthStatus(),
+          loadSentinel2Health(),
+          loadMonitoringZones(),
+        ]);
+
+        // Try loading vegetation events (non-blocking)
+        loadVegetationEvents();
+      })();
 
       // Auto-refresh every 5 minutes
-      setInterval(loadHotspots, 5 * 60 * 1000);
+      setInterval(loadAllData, 5 * 60 * 1000);
     </script>
   </body>
 </html>
