@@ -70,3 +70,11 @@ Thumbs.db
 credentials.json
 service_account.json
 ~/.config/earthengine/
+
+# Google Cloud Service Account Keys
+focuselite-7be73e7f766f.json
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!requirements.json
