@@ -7,6 +7,15 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+      <!-- ══ PWA Support ══ -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="EagleEye">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+  
+  <!-- Mobile viewport (ensure this exists) -->
+  <!-- Note: viewport already defined in head -->
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -67,10 +76,14 @@
         font-size: 10px; color: #8b949e;
         text-transform: uppercase; letter-spacing: 0.5px;
       }
+
       .stat-value { font-size: 18px; font-weight: 600; transition: color 0.3s ease; }
       .stat-value.high { color: #f85149; font-size: 14px; }
-      .stat-value.medium { color: #d29922; }
-      .stat-value.low { color: #3fb950; }
+      .stat-value.medium { color: #d29922; font-size: 14px; }
+      .stat-value.low { color: #3fb950; font-size: 14px; }
+      .stat-value.alerts { color: #f85149; font-size: 14px; }
+      .stat-value.veg { color: #58a6ff; font-size: 14px; }
+      .stat-value.updated { font-size: 13px; }
 
       .confidence-values {
         display: flex;
@@ -122,6 +135,7 @@
       .filter-btn:hover { background: #30363d; }
       .filter-btn.active { background: #388bfd26; border-color: #58a6ff; color: #58a6ff; }
       .filter-btn.veg-active { background: #23863626; border-color: #3fb950; color: #3fb950; }
+      .filter-btn.alert-active { background: #f8514926; border-color: #f85149; color: #f85149; }
 
       .refresh-btn {
         background: #238636; color: #fff; border: 1px solid #2ea043;
@@ -313,6 +327,49 @@
       }
       .veg-empty-icon { font-size: 32px; margin-bottom: 8px; }
 
+      /* ── Alert items ── */
+      .alert-item {
+        padding: 10px 12px; border-bottom: 1px solid #21262d;
+        border-radius: 6px; transition: background 0.15s;
+        margin-bottom: 2px; cursor: pointer;
+      }
+      .alert-item:hover { background: #21262d; }
+      .alert-item-header {
+        display: flex; justify-content: space-between; align-items: center; gap: 8px;
+      }
+      .alert-priority-badge {
+        font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 700;
+      }
+      .alert-priority-badge.critical { background: #f8514922; color: #f85149; }
+      .alert-priority-badge.high { background: #ff6b3522; color: #ff6b35; }
+      .alert-priority-badge.medium { background: #d2992222; color: #d29922; }
+      .alert-priority-badge.low { background: #3fb95022; color: #3fb950; }
+      .alert-item-title { font-size: 12px; font-weight: 600; flex: 1; }
+      .alert-item-detail { font-size: 11px; color: #8b949e; margin-top: 4px; }
+      .alert-item-evidence { font-size: 10px; color: #58a6ff; margin-top: 4px; }
+      .alert-item-action { font-size: 11px; color: #d29922; margin-top: 6px; padding: 6px 8px; background: #d2992210; border-radius: 4px; }
+      .alert-dismiss-btn {
+        background: none; border: 1px solid #30363d; color: #8b949e;
+        border-radius: 4px; padding: 2px 8px; font-size: 10px; cursor: pointer;
+        margin-top: 6px; transition: all 0.15s;
+      }
+      .alert-dismiss-btn:hover { border-color: #f85149; color: #f85149; }
+
+      /* ── Movement vector items ── */
+      .movement-item {
+        padding: 10px 12px; border: 1px solid #30363d; border-radius: 8px;
+        margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s;
+      }
+      .movement-item:hover { border-color: #58a6ff; }
+      .movement-item-header { display: flex; justify-content: space-between; align-items: center; }
+      .movement-class-badge {
+        font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 700;
+      }
+      .movement-class-badge.rapid_relocation { background: #f8514922; color: #f85149; }
+      .movement-class-badge.corridor { background: #d2992222; color: #d29922; }
+      .movement-class-badge.camp_relocation { background: #ff6b3522; color: #ff6b35; }
+      .movement-item-detail { font-size: 11px; color: #8b949e; margin-top: 4px; }
+
       /* ── Loading overlay ── */
       #loading {
         position: fixed; inset: 0; background: rgba(13,17,23,0.85);
@@ -386,12 +443,13 @@
           <span class="comp-pill" id="comp-firms" title="NASA FIRMS">🔥 FIRMS</span>
           <span class="comp-pill" id="comp-sentinel" title="Sentinel-2 Vegetation">🌿 S2</span>
           <span class="comp-pill" id="comp-acled" title="ACLED Conflict Data">⚔️ ACLED</span>
+          <span class="comp-pill" id="comp-alerts" title="Intelligence Alerts">🚨 Alerts</span>
         </div>
         <span class="status-pill" id="status-pill">● LIVE</span>
       </div>
     </header>
 
-    <!-- Stats bar -->
+        <!-- Stats bar -->
     <div class="stats-bar">
       <div class="stat">
         <span class="stat-label">Total Hotspots</span>
@@ -402,8 +460,8 @@
         <span class="stat-label">Confidence</span>
         <div class="confidence-values">
           <span class="stat-value high" id="stat-high" title="High confidence">🔴 —</span>
-          <span class="stat-value medium" id="stat-medium" style="font-size:14px" title="Nominal">🟡 —</span>
-          <span class="stat-value low" id="stat-low" style="font-size:14px" title="Low">🟢 —</span>
+          <span class="stat-value medium" id="stat-medium" title="Nominal">🟡 —</span>
+          <span class="stat-value low" id="stat-low" title="Low">🟢 —</span>
         </div>
       </div>
       <div class="divider"></div>
@@ -431,15 +489,20 @@
       </div>
       <div class="divider"></div>
       <div class="stat">
+        <span class="stat-label">Active Alerts</span>
+        <span class="stat-value alerts" id="stat-alerts" title="Movement alerts">🚨 —</span>
+      </div>
+      <div class="divider"></div>
+      <div class="stat">
         <span class="stat-label">Veg Changes</span>
-        <span class="stat-value" id="stat-veg-events" style="font-size:14px;color:#58a6ff" title="Vegetation change events">🌿 —</span>
+        <span class="stat-value veg" id="stat-veg-events" title="Vegetation change events">🌿 —</span>
       </div>
       <div class="divider"></div>
       <div class="zone-stats" id="zone-stats"></div>
       <div class="divider"></div>
       <div class="stat">
         <span class="stat-label">Updated</span>
-        <span class="stat-value" id="stat-updated" style="font-size:13px">—</span>
+        <span class="stat-value updated" id="stat-updated">—</span>
       </div>
 
       <!-- Controls -->
@@ -467,6 +530,7 @@
         <button class="filter-btn active" id="cluster-toggle" onclick="toggleClustering()" title="Toggle clustering">🔵 Clusters</button>
         <button class="filter-btn" id="veg-toggle" onclick="toggleVegetationLayer()" title="Toggle vegetation changes layer">🌿 Veg</button>
         <button class="filter-btn" id="zones-toggle" onclick="toggleMonitoringZones()" title="Toggle monitoring zone overlays">📐 Zones</button>
+        <button class="filter-btn" id="movement-toggle" onclick="toggleMovementLayer()" title="Toggle movement vectors">🧭 Move</button>
         <button class="filter-btn" id="panel-toggle" onclick="toggleSidePanel()" title="Intelligence panel">📊 Intel</button>
         <button class="refresh-btn" id="refresh-btn" onclick="loadAllData()">↻ Refresh</button>
       </div>
@@ -488,6 +552,7 @@
       <div class="side-panel-tabs">
         <div class="side-tab active" onclick="switchTab('states', this)">🏛️ States</div>
         <div class="side-tab" onclick="switchTab('threats', this)">🎯 Threats</div>
+        <div class="side-tab" onclick="switchTab('alerts', this)">🚨 Alerts</div>
         <div class="side-tab" onclick="switchTab('vegetation', this)">🌿 Veg</div>
         <div class="side-tab" onclick="switchTab('tiers', this)">⚔️ Tiers</div>
       </div>
@@ -499,6 +564,248 @@
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+      <!-- ══ PWA + Auth Registration ══ -->
+  <script>
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/service-worker.js')
+        .then(reg => {
+          console.log('[PWA] Service worker registered:', reg.scope);
+          // Track online status
+          localStorage.setItem('eagleeye_last_online', new Date().toISOString());
+        })
+        .catch(err => console.warn('[PWA] SW registration failed:', err));
+    }
+
+    // ── Auth Token Management ──
+    const AUTH = {
+      getToken() {
+        return localStorage.getItem('eagleeye_access_token');
+      },
+      getRefreshToken() {
+        return localStorage.getItem('eagleeye_refresh_token');
+      },
+      getUser() {
+        const u = localStorage.getItem('eagleeye_user');
+        return u ? JSON.parse(u) : null;
+      },
+      setSession(data) {
+        localStorage.setItem('eagleeye_access_token', data.access_token);
+        localStorage.setItem('eagleeye_refresh_token', data.refresh_token);
+        localStorage.setItem('eagleeye_user', JSON.stringify(data.user));
+      },
+      clearSession() {
+        localStorage.removeItem('eagleeye_access_token');
+        localStorage.removeItem('eagleeye_refresh_token');
+        localStorage.removeItem('eagleeye_user');
+      },
+      isLoggedIn() {
+        return !!this.getToken();
+      },
+      isMilitary() {
+        const user = this.getUser();
+        return user && ['superadmin', 'admin', 'military'].includes(user.role);
+      },
+      authHeaders() {
+        const token = this.getToken();
+        return token ? { 'Authorization': `Bearer ${token}` } : {};
+      },
+
+      // Auto-refresh token
+      async refreshIfNeeded() {
+        const token = this.getToken();
+        if (!token) return false;
+
+        try {
+          // Decode JWT to check expiry (without verification)
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          const expiresAt = payload.exp * 1000;
+          const now = Date.now();
+          const fiveMin = 5 * 60 * 1000;
+
+          if (expiresAt - now < fiveMin) {
+            console.log('[AUTH] Token expiring soon, refreshing...');
+            const resp = await fetch('/api/auth/refresh', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ refresh_token: this.getRefreshToken() }),
+            });
+
+            if (resp.ok) {
+              const data = await resp.json();
+              this.setSession(data);
+              console.log('[AUTH] ✓ Token refreshed');
+              return true;
+            } else {
+              this.clearSession();
+              return false;
+            }
+          }
+          return true;
+        } catch (e) {
+          console.warn('[AUTH] Token refresh failed:', e);
+          return false;
+        }
+      }
+    };
+
+    // ── Authenticated Fetch Wrapper ──
+    async function authFetch(url, options = {}) {
+      await AUTH.refreshIfNeeded();
+
+      const headers = {
+        ...options.headers,
+        ...AUTH.authHeaders(),
+      };
+
+      const resp = await fetch(url, { ...options, headers });
+
+      if (resp.status === 401) {
+        AUTH.clearSession();
+        showLoginModal();
+        throw new Error('Authentication required');
+      }
+
+      return resp;
+    }
+
+    // ── Login Modal ──
+    function showLoginModal() {
+      // Remove existing modal if any
+      const existing = document.getElementById('login-modal');
+      if (existing) existing.remove();
+
+      const modal = document.createElement('div');
+      modal.id = 'login-modal';
+      modal.innerHTML = `
+        <div style="
+          position:fixed;inset:0;background:rgba(0,0,0,0.85);
+          display:flex;align-items:center;justify-content:center;
+          z-index:10000;padding:20px;
+        ">
+          <div style="
+            background:#161b22;border:1px solid #30363d;border-radius:12px;
+            padding:32px;max-width:400px;width:100%;
+          ">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-size:48px">🦅</div>
+              <h2 style="color:#e6edf3;margin:8px 0 4px">EagleEye Nigeria</h2>
+              <p style="color:#8b949e;font-size:13px">Satellite Intelligence Platform</p>
+            </div>
+            
+            <div id="login-error" style="display:none;background:#f8514922;color:#f85149;padding:8px 12px;border-radius:6px;margin-bottom:16px;font-size:13px"></div>
+            
+            <input id="login-email" type="text" placeholder="Email or Username"
+              style="width:100%;padding:10px 14px;background:#0d1117;border:1px solid #30363d;
+              border-radius:6px;color:#e6edf3;font-size:14px;margin-bottom:12px;outline:none">
+            
+            <input id="login-password" type="password" placeholder="Password"
+              style="width:100%;padding:10px 14px;background:#0d1117;border:1px solid #30363d;
+              border-radius:6px;color:#e6edf3;font-size:14px;margin-bottom:16px;outline:none">
+            
+            <button id="login-submit" style="
+              width:100%;padding:12px;background:#f85149;color:white;border:none;
+              border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;
+            ">🔐 Sign In</button>
+            
+            <div style="margin-top:16px;text-align:center">
+              <button id="login-skip" style="
+                background:none;border:none;color:#484f58;font-size:12px;cursor:pointer;
+              ">Continue as Public (limited data)</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Event handlers
+      document.getElementById('login-submit').addEventListener('click', handleLogin);
+      document.getElementById('login-password').addEventListener('keypress', e => {
+        if (e.key === 'Enter') handleLogin();
+      });
+      document.getElementById('login-skip').addEventListener('click', () => {
+        modal.remove();
+      });
+    }
+
+    async function handleLogin() {
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+      const errorEl = document.getElementById('login-error');
+      const submitBtn = document.getElementById('login-submit');
+
+      if (!email || !password) {
+        errorEl.textContent = 'Please enter email and password';
+        errorEl.style.display = 'block';
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = '⏳ Signing in...';
+
+      try {
+        const resp = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+
+        if (resp.ok) {
+          const data = await resp.json();
+          AUTH.setSession(data);
+          document.getElementById('login-modal').remove();
+          updateAuthUI();
+          // Reload data with full access
+          loadData();
+        } else {
+          const err = await resp.json();
+          errorEl.textContent = err.detail || 'Login failed';
+          errorEl.style.display = 'block';
+        }
+      } catch (e) {
+        errorEl.textContent = 'Connection error — check network';
+        errorEl.style.display = 'block';
+      }
+
+      submitBtn.disabled = false;
+      submitBtn.textContent = '🔐 Sign In';
+    }
+
+    function updateAuthUI() {
+      const user = AUTH.getUser();
+      const authIndicator = document.getElementById('auth-indicator');
+      
+      if (authIndicator) {
+        if (user) {
+          const roleIcon = {
+            superadmin: '👑', admin: '🛡️', military: '⭐',
+            analyst: '📊', public: '👤',
+          }[user.role] || '👤';
+          
+          authIndicator.innerHTML = `
+            ${roleIcon} ${user.full_name}
+            <span style="font-size:10px;opacity:0.7">(${user.role})</span>
+          `;
+          authIndicator.style.color = user.role === 'military' ? '#f85149' : '#58a6ff';
+        } else {
+          authIndicator.innerHTML = '🔒 <a href="#" onclick="showLoginModal()" style="color:#58a6ff">Sign In</a>';
+        }
+      }
+    }
+
+    // Show login on first load if not authenticated
+    document.addEventListener('DOMContentLoaded', () => {
+      updateAuthUI();
+      // Auto-show login for fresh visits
+      if (!AUTH.isLoggedIn()) {
+        setTimeout(showLoginModal, 1000);
+      }
+    });
+
+    // Periodic token refresh
+    setInterval(() => AUTH.refreshIfNeeded(), 60000);
+  </script>
     <script>
       // ════════════════════════════════════════════════════════
       //  STATE
@@ -518,6 +825,13 @@
       let zonesLayerGroup = null;
       let zonesVisible = false;
       let sentinel2Available = false;
+
+      // Movement / Alerts state
+      let movementData = null;
+      let movementAlerts = [];
+      let activeAlerts = [];
+      let movementLayerGroup = null;
+      let movementLayerVisible = false;
 
       // ════════════════════════════════════════════════════════
       //  MAP SETUP
@@ -587,6 +901,11 @@
             <div class="legend-diamond" style="background:#3fb950"></div><span>Regrowth</span>
             <span class="legend-count" id="leg-regrowth">0</span>
           </div>
+          <div style="margin-top:10px" class="legend-title">Movement</div>
+          <div class="legend-item">
+            <div style="width:14px;height:0;border-top:2px solid #ff6b35"></div><span>Movement Vector</span>
+            <span class="legend-count" id="leg-movements">0</span>
+          </div>
           <div style="margin-top:10px" class="legend-title">Zones</div>
           <div class="legend-item"><div style="width:14px;height:0;border-top:2px dashed #f85149"></div><span>Red Zone</span></div>
           <div class="legend-item"><div style="width:14px;height:0;border-top:2px dashed #d29922"></div><span>Watch Zone</span></div>
@@ -594,7 +913,8 @@
           <div style="margin-top:8px;font-size:10px;color:#8b949e">
             <kbd style="background:#21262d;padding:1px 4px;border-radius:3px">R</kbd> refresh ·
             <kbd style="background:#21262d;padding:1px 4px;border-radius:3px">C</kbd> clusters ·
-            <kbd style="background:#21262d;padding:1px 4px;border-radius:3px">V</kbd> vegetation
+            <kbd style="background:#21262d;padding:1px 4px;border-radius:3px">V</kbd> vegetation ·
+            <kbd style="background:#21262d;padding:1px 4px;border-radius:3px">M</kbd> movement
           </div>
         `;
         return div;
@@ -616,6 +936,7 @@
       function scoreColor(s) { return s >= 80 ? '#f85149' : s >= 60 ? '#ff6b35' : s >= 40 ? '#d29922' : '#3fb950'; }
       function vegClassColor(c) { return c === 'clearing' ? '#f85149' : c === 'burn_scar' ? '#ff6b35' : '#3fb950'; }
       function vegSeverityColor(s) { return s === 'critical' ? '#f85149' : s === 'high' ? '#ff6b35' : s === 'moderate' ? '#d29922' : '#3fb950'; }
+      function alertPriorityColor(p) { return p === 'critical' ? '#f85149' : p === 'high' ? '#ff6b35' : p === 'medium' ? '#d29922' : '#3fb950'; }
       function tierBadge(t) {
         if (!t) return '';
         if (t.includes('Tier 1')) return '<span class="tier-badge t1">T1</span>';
@@ -642,6 +963,7 @@
       function createHotspotMarker(f) {
         const [lon, lat] = f.geometry.coordinates;
         const p = f.properties;
+        const loc = p.location || {};
         const priority = p.priority || 'MONITOR';
         const color = priorityColor(priority);
         const score = p.threat_score || 0;
@@ -655,24 +977,72 @@
           radius, fillColor: color, color, weight, opacity: 0.9, fillOpacity: 0.75,
         });
 
+        // Build location section
+        const hasLocation = loc.state || p.state;
+        const stateName = p.state || loc.state || '—';
+        const lgaName = p.lga || loc.lga || '—';
+        const nearestTown = p.nearest_town || loc.nearest_town || '';
+        const townDist = loc.distance_km;
+        const townDir = loc.direction || '';
+        const coordsDms = loc.coords_dms || `${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E`;
+        const opDesc = loc.operational_description || '';
+        const placeName = loc.place_name || '';
+        const roadName = loc.road || '';
+        const addCtx = loc.additional_context || '';
+        const gmapsUrl = p.google_maps_url || `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+        const satUrl = `https://www.google.com/maps/@${lat},${lon},5000m/data=!3m1!1e3`;
+
+        // Nearest town display
+        let townDisplay = nearestTown;
+        if (townDist !== undefined && townDist !== null) {
+          if (townDist < 2) {
+            townDisplay = `<strong>${nearestTown}</strong> (within town)`;
+          } else {
+            townDisplay = `<strong>${nearestTown}</strong> (${townDist}km ${townDir})`;
+          }
+        }
+
         marker.bindPopup(`
-          <div style="font-family:'Segoe UI',sans-serif;min-width:240px">
+          <div style="font-family:'Segoe UI',sans-serif;min-width:300px">
+            
+            ${opDesc ? `
+            <div style="background:${color};color:white;padding:8px 12px;margin:-1px -20px 10px;border-radius:0;font-size:12px;font-weight:600;line-height:1.4">
+              🔥 ${opDesc}
+            </div>` : `
             <div class="popup-header">
               🔥 Thermal Detection
               <span class="popup-badge" style="background:${color}22;color:${color};border:1px solid ${color}55">${priority}</span>
+            </div>`}
+
+            <!-- PRECISE LOCATION -->
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">📍 Location</div>
+              <table class="popup-table">
+                <tr><td>State</td><td><strong>${stateName}</strong> ${tierBadge(p.threat_tier)}</td></tr>
+                <tr><td>LGA</td><td><strong>${lgaName}</strong></td></tr>
+                ${nearestTown ? `<tr><td>Nearest Town</td><td>${townDisplay}</td></tr>` : ''}
+                ${placeName && placeName !== nearestTown ? `<tr><td>Place</td><td>${placeName}</td></tr>` : ''}
+                ${roadName ? `<tr><td>Road</td><td>${roadName}</td></tr>` : ''}
+                <tr><td>Coordinates</td><td style="font-family:monospace;font-size:11px">${coordsDms}</td></tr>
+              </table>
             </div>
-            <table class="popup-table">
-              <tr><td>State</td><td><strong>${p.state||'—'}</strong> ${tierBadge(p.threat_tier)}</td></tr>
-              <tr><td>Confidence</td><td style="color:${cc};font-weight:600">${confidenceLabel(p.confidence)}</td></tr>
-              <tr><td>Brightness</td><td><strong>${p.brightness}</strong> K</td></tr>
-              <tr><td>FRP</td><td><strong>${p.frp}</strong> MW</td></tr>
-              <tr><td>Acquired</td><td>${p.acq_date} · ${formatTime(p.acq_time)}</td></tr>
-              <tr><td>Day/Night</td><td>${p.daynight==='N'?'🌙 Night':p.daynight==='D'?'☀️ Day':p.daynight||'—'}</td></tr>
-              <tr><td>Zone</td><td>
-                <span class="popup-zone-badge" style="background:${zoneColor(p.red_zone)}15;color:${zoneColor(p.red_zone)};border:1px solid ${zoneColor(p.red_zone)}40">${p.red_zone||'—'}</span>
-              </td></tr>
-              <tr><td>Coords</td><td>${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E</td></tr>
-            </table>
+
+            <!-- DETECTION DATA -->
+            <div style="border-top:1px solid #21262d;padding-top:8px;margin-bottom:8px">
+              <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">🛰️ Detection Data</div>
+              <table class="popup-table">
+                <tr><td>Confidence</td><td style="color:${cc};font-weight:600">${confidenceLabel(p.confidence)}</td></tr>
+                <tr><td>Brightness</td><td><strong>${p.brightness}</strong> K</td></tr>
+                <tr><td>FRP</td><td><strong>${p.frp}</strong> MW</td></tr>
+                <tr><td>Acquired</td><td>${p.acq_date} · ${formatTime(p.acq_time)}</td></tr>
+                <tr><td>Day/Night</td><td>${p.daynight==='N'?'🌙 Night':p.daynight==='D'?'☀️ Day':p.daynight||'—'}</td></tr>
+                <tr><td>Zone</td><td>
+                  <span class="popup-zone-badge" style="background:${zoneColor(p.red_zone)}15;color:${zoneColor(p.red_zone)};border:1px solid ${zoneColor(p.red_zone)}40">${p.red_zone||'—'}</span>
+                </td></tr>
+              </table>
+            </div>
+
+            <!-- THREAT SCORE -->
             <div class="popup-score-bar">
               <div style="display:flex;justify-content:space-between;font-size:11px">
                 <span style="color:#8b949e">Threat Score</span>
@@ -680,13 +1050,31 @@
               </div>
               <div class="score-bar-bg"><div class="score-bar-fill" style="width:${score}%;background:${sc}"></div></div>
             </div>
-            <div class="popup-links">
-              <a href="https://www.google.com/maps/@${lat},${lon},15z" target="_blank" rel="noopener">📍 Maps</a>
-              <span style="color:#30363d;margin:0 6px">|</span>
-              <a href="/api/v1/hotspots/states?state=${encodeURIComponent(p.state||'')}" target="_blank">📊 State</a>
+
+            ${addCtx ? `
+            <div style="margin-top:8px;padding:6px 8px;background:#161b2266;border-radius:4px;font-size:11px;color:#58a6ff;line-height:1.4">
+              ℹ️ ${addCtx}
+            </div>` : ''}
+
+            <!-- ACTION BUTTONS -->
+            <div style="margin-top:10px;display:flex;gap:6px">
+              <a href="${gmapsUrl}" target="_blank" rel="noopener"
+                 style="flex:1;text-align:center;background:#2563eb;color:white;padding:8px;border-radius:4px;text-decoration:none;font-size:12px;font-weight:600">
+                🗺️ Google Maps
+              </a>
+              <a href="${satUrl}" target="_blank" rel="noopener"
+                 style="flex:1;text-align:center;background:#059669;color:white;padding:8px;border-radius:4px;text-decoration:none;font-size:12px;font-weight:600">
+                🛰️ Satellite View
+              </a>
+            </div>
+            <div style="margin-top:6px;text-align:center">
+              <a href="/api/v1/hotspots/states?state=${encodeURIComponent(stateName)}" target="_blank" 
+                 style="font-size:11px;color:#58a6ff;text-decoration:none">
+                📊 View all hotspots in ${stateName} State
+              </a>
             </div>
           </div>
-        `, { maxWidth: 300 });
+        `, { maxWidth: 360 });
 
         return marker;
       }
@@ -699,8 +1087,8 @@
         const lon = evt.longitude;
         const color = vegClassColor(evt.classification);
         const sevColor = vegSeverityColor(evt.severity);
+        const loc = evt.location || {};
 
-        // Diamond shape via rotated square div icon
         const size = evt.severity === 'critical' ? 16 : evt.severity === 'high' ? 13 : 10;
         const icon = L.divIcon({
           className: '',
@@ -721,25 +1109,75 @@
         const confPct = (evt.confidence * 100).toFixed(0);
         const changeSign = evt.mean_change > 0 ? '+' : '';
 
+        // Location data
+        const stateName = evt.state || loc.state || '—';
+        const lgaName = evt.lga || loc.lga || '—';
+        const nearestTown = evt.nearest_town || loc.nearest_town || '';
+        const townDist = loc.nearest_town_distance_km;
+        const townDir = loc.nearest_town_direction || loc.direction || '';
+        const coordsDms = loc.coords_dms || `${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E`;
+        const opDesc = evt.operational_description || loc.operational_description || '';
+        const placeName = loc.nominatim_place || loc.place_name || '';
+        const roadName = loc.road || '';
+        const addCtx = loc.additional_context || '';
+        const gmapsUrl = evt.google_maps_url || loc.google_maps_url || `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+        const satUrl = `https://www.google.com/maps/@${lat},${lon},3000m/data=!3m1!1e3`;
+
+        // Classification label
+        const classLabel = evt.classification.replace(/_/g, ' ');
+        const classIcon = evt.classification === 'clearing' ? '🪓' : evt.classification === 'burn_scar' ? '🔥' : '🌱';
+
+        // Town display
+        let townDisplay = nearestTown;
+        if (townDist !== undefined && townDist !== null && nearestTown) {
+          townDisplay = townDist < 2
+            ? `<strong>${nearestTown}</strong> (within town)`
+            : `<strong>${nearestTown}</strong> (${townDist}km ${townDir})`;
+        }
+
         marker.bindPopup(`
-          <div style="font-family:'Segoe UI',sans-serif;min-width:240px">
+          <div style="font-family:'Segoe UI',sans-serif;min-width:300px">
+            
+            ${opDesc ? `
+            <div style="background:${color};color:white;padding:8px 12px;margin:-1px -20px 10px;border-radius:0;font-size:12px;font-weight:600;line-height:1.4">
+              ${classIcon} ${classLabel.toUpperCase()} — ${opDesc}
+            </div>` : `
             <div class="popup-header">
               🌿 Vegetation Change
               <span class="popup-badge" style="background:${sevColor}22;color:${sevColor};border:1px solid ${sevColor}55">${evt.severity.toUpperCase()}</span>
+            </div>`}
+
+            <!-- PRECISE LOCATION -->
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">📍 Location</div>
+              <table class="popup-table">
+                <tr><td>State</td><td><strong>${stateName}</strong></td></tr>
+                <tr><td>LGA</td><td><strong>${lgaName}</strong></td></tr>
+                ${nearestTown ? `<tr><td>Nearest Town</td><td>${townDisplay}</td></tr>` : ''}
+                ${placeName && placeName !== nearestTown ? `<tr><td>Place</td><td>${placeName}</td></tr>` : ''}
+                ${roadName ? `<tr><td>Road</td><td>${roadName}</td></tr>` : ''}
+                <tr><td>Coordinates</td><td style="font-family:monospace;font-size:11px">${coordsDms}</td></tr>
+              </table>
             </div>
-            <table class="popup-table">
-              <tr><td>Type</td><td>
-                <span class="veg-class-badge ${evt.classification}" style="background:${color}22;color:${color};border:1px solid ${color}55">${evt.classification.replace('_',' ')}</span>
-              </td></tr>
-              <tr><td>Index</td><td>${evt.index_used.toUpperCase()}</td></tr>
-              <tr><td>Mean Δ</td><td style="color:${color};font-weight:600">${changeSign}${evt.mean_change.toFixed(4)}</td></tr>
-              <tr><td>Max Δ</td><td>${changeSign.replace('+','')}${evt.max_change.toFixed(4)}</td></tr>
-              <tr><td>Area</td><td><strong>${evt.area_hectares}</strong> ha (${evt.area_pixels} px)</td></tr>
-              <tr><td>Before</td><td>${evt.date_before}</td></tr>
-              <tr><td>After</td><td>${evt.date_after}</td></tr>
-              <tr><td>Zone</td><td>${evt.vegetation_zone}</td></tr>
-              <tr><td>Coords</td><td>${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E</td></tr>
-            </table>
+
+            <!-- CHANGE DATA -->
+            <div style="border-top:1px solid #21262d;padding-top:8px;margin-bottom:8px">
+              <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">📊 Change Analysis</div>
+              <table class="popup-table">
+                <tr><td>Type</td><td>
+                  <span class="veg-class-badge ${evt.classification}" style="background:${color}22;color:${color};border:1px solid ${color}55">${classLabel}</span>
+                </td></tr>
+                <tr><td>Index</td><td>${evt.index_used.toUpperCase()}</td></tr>
+                <tr><td>Mean Δ</td><td style="color:${color};font-weight:600">${changeSign}${evt.mean_change.toFixed(4)}</td></tr>
+                <tr><td>Max Δ</td><td>${evt.max_change.toFixed(4)}</td></tr>
+                <tr><td>Area</td><td><strong>${evt.area_hectares}</strong> ha (${evt.area_pixels} px)</td></tr>
+                <tr><td>Before</td><td>${evt.date_before}</td></tr>
+                <tr><td>After</td><td>${evt.date_after}</td></tr>
+                <tr><td>Veg Zone</td><td>${evt.vegetation_zone}</td></tr>
+              </table>
+            </div>
+
+            <!-- CONFIDENCE -->
             <div class="popup-score-bar">
               <div style="display:flex;justify-content:space-between;font-size:11px">
                 <span style="color:#8b949e">Confidence</span>
@@ -747,19 +1185,32 @@
               </div>
               <div class="score-bar-bg"><div class="score-bar-fill" style="width:${confPct}%;background:${sevColor}"></div></div>
             </div>
+
+            <!-- CORRELATIONS -->
             ${evt.thermal_correlation ? `<div style="margin-top:6px;font-size:11px;color:#d29922">🔥 ${evt.nearby_hotspots} nearby thermal hotspot(s)</div>` : ''}
             ${evt.conflict_correlation ? `<div style="margin-top:4px;font-size:11px;color:#f85149">⚔️ ${evt.nearby_conflicts} nearby conflict event(s) (${evt.nearby_fatalities} fatalities)</div>` : ''}
-            <div class="popup-links">
-              <a href="https://www.google.com/maps/@${lat},${lon},14z" target="_blank" rel="noopener">📍 Maps</a>
-              <span style="color:#30363d;margin:0 6px">|</span>
-              <a href="/api/v1/sentinel2/events?min_confidence=${Math.max(evt.confidence-0.1,0).toFixed(1)}" target="_blank">🌿 Similar</a>
+
+            ${addCtx ? `
+            <div style="margin-top:8px;padding:6px 8px;background:#161b2266;border-radius:4px;font-size:11px;color:#58a6ff;line-height:1.4">
+              ℹ️ ${addCtx}
+            </div>` : ''}
+
+            <!-- ACTION BUTTONS -->
+            <div style="margin-top:10px;display:flex;gap:6px">
+              <a href="${gmapsUrl}" target="_blank" rel="noopener"
+                 style="flex:1;text-align:center;background:#2563eb;color:white;padding:8px;border-radius:4px;text-decoration:none;font-size:12px;font-weight:600">
+                🗺️ Google Maps
+              </a>
+              <a href="${satUrl}" target="_blank" rel="noopener"
+                 style="flex:1;text-align:center;background:#059669;color:white;padding:8px;border-radius:4px;text-decoration:none;font-size:12px;font-weight:600">
+                🛰️ Satellite View
+              </a>
             </div>
           </div>
-        `, { maxWidth: 320 });
+        `, { maxWidth: 360 });
 
         return marker;
       }
-
       // ════════════════════════════════════════════════════════
       //  RENDER HOTSPOTS
       // ════════════════════════════════════════════════════════
@@ -784,7 +1235,6 @@
           hotspotLayer.addTo(map);
         }
 
-        // Update legend counts
         const counts = { CRITICAL:0, HIGH:0, ELEVATED:0, MONITOR:0 };
         features.forEach(f => { counts[f.properties.priority || 'MONITOR']++; });
         if (el('leg-critical')) el('leg-critical').textContent = counts.CRITICAL;
@@ -804,7 +1254,6 @@
         vegEvents.forEach(evt => vegLayerGroup.addLayer(createVegMarker(evt)));
         vegLayerGroup.addTo(map);
 
-        // Update legend
         const cls = { clearing: 0, burn_scar: 0, regrowth: 0 };
         vegEvents.forEach(e => { if (cls[e.classification] !== undefined) cls[e.classification]++; });
         if (el('leg-clearing')) el('leg-clearing').textContent = cls.clearing;
@@ -815,11 +1264,149 @@
       function toggleVegetationLayer() {
         vegLayerVisible = !vegLayerVisible;
         el('veg-toggle').classList.toggle('veg-active', vegLayerVisible);
-        el('veg-toggle').classList.toggle('active', false);
         if (vegLayerVisible && vegEvents.length === 0) {
           loadVegetationEvents();
         } else {
           renderVegetationLayer();
+        }
+      }
+
+      // ════════════════════════════════════════════════════════
+      //  RENDER MOVEMENT VECTORS
+      // ════════════════════════════════════════════════════════
+      function renderMovementLayer() {
+        if (movementLayerGroup) { map.removeLayer(movementLayerGroup); movementLayerGroup = null; }
+        if (!movementLayerVisible || !movementData) return;
+
+        movementLayerGroup = L.layerGroup();
+        const movements = movementData.movements || [];
+
+               movements.forEach(mv => {
+          const color = mv.classification === 'rapid_relocation' ? '#f85149'
+            : mv.classification === 'corridor' ? '#d29922' : '#ff6b35';
+
+          // Draw line from origin to destination
+          const line = L.polyline(
+            [[mv.origin_lat, mv.origin_lon], [mv.destination_lat, mv.destination_lon]],
+            { color, weight: 2.5, opacity: 0.8, dashArray: '8 6' }
+          );
+
+          // Arrowhead at destination
+          const arrowIcon = L.divIcon({
+            className: '',
+            html: `<div style="
+              font-size: 16px; color: ${color};
+              transform: rotate(${mv.bearing_degrees - 90}deg);
+              text-shadow: 0 0 4px rgba(0,0,0,0.6);
+            ">➤</div>`,
+            iconSize: [16, 16],
+            iconAnchor: [8, 8],
+          });
+          const arrow = L.marker(
+            [mv.destination_lat, mv.destination_lon],
+            { icon: arrowIcon }
+          );
+
+          // Origin marker (hollow circle)
+          const origin = L.circleMarker(
+            [mv.origin_lat, mv.origin_lon],
+            { radius: 5, color, weight: 2, fillOpacity: 0, opacity: 0.8 }
+          );
+
+                    // Inside renderMovementLayer(), replace the popupHtml variable:
+          const confPct = (mv.confidence * 100).toFixed(0);
+          
+          // Build location labels for origin and destination
+          const originLabel = mv.origin_nearest_town 
+            ? `${mv.origin_nearest_town}, ${mv.origin_state || '—'}`
+            : `${mv.origin_state || '—'} (${mv.origin_lat.toFixed(3)}°, ${mv.origin_lon.toFixed(3)}°)`;
+          const destLabel = mv.destination_nearest_town
+            ? `${mv.destination_nearest_town}, ${mv.destination_state || '—'}`
+            : `${mv.destination_state || '—'} (${mv.destination_lat.toFixed(3)}°, ${mv.destination_lon.toFixed(3)}°)`;
+
+          const originGmaps = `https://www.google.com/maps/search/?api=1&query=${mv.origin_lat},${mv.origin_lon}`;
+          const destGmaps = `https://www.google.com/maps/search/?api=1&query=${mv.destination_lat},${mv.destination_lon}`;
+
+          const popupHtml = `
+            <div style="font-family:'Segoe UI',sans-serif;min-width:280px">
+              <div class="popup-header">
+                🧭 Movement Detected
+                <span class="popup-badge" style="background:${color}22;color:${color};border:1px solid ${color}55">
+                  ${mv.classification.replace(/_/g, ' ').toUpperCase()}
+                </span>
+              </div>
+
+              <!-- MOVEMENT PATH -->
+              <div style="margin-bottom:8px">
+                <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">📍 Movement Path</div>
+                <div style="display:flex;align-items:center;gap:8px;margin:6px 0;padding:6px 8px;background:#161b2244;border-radius:4px">
+                  <div style="flex:1">
+                    <div style="font-size:10px;color:#8b949e">FROM</div>
+                    <div style="font-size:12px;font-weight:600;color:#e6edf3">${originLabel}</div>
+                    <div style="font-size:10px;color:#8b949e;font-family:monospace">${mv.origin_lat.toFixed(4)}°N, ${mv.origin_lon.toFixed(4)}°E</div>
+                  </div>
+                  <div style="font-size:20px;color:${color}">➤</div>
+                  <div style="flex:1">
+                    <div style="font-size:10px;color:#8b949e">TO</div>
+                    <div style="font-size:12px;font-weight:600;color:#e6edf3">${destLabel}</div>
+                    <div style="font-size:10px;color:#8b949e;font-family:monospace">${mv.destination_lat.toFixed(4)}°N, ${mv.destination_lon.toFixed(4)}°E</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- MOVEMENT DATA -->
+              <table class="popup-table">
+                <tr><td>Distance</td><td><strong>${mv.distance_km}</strong> km</td></tr>
+                <tr><td>Bearing</td><td>${mv.bearing_degrees}°</td></tr>
+                <tr><td>Speed</td><td><strong>${mv.speed_kmh}</strong> km/h</td></tr>
+                <tr><td>Time Δ</td><td>${mv.time_delta_hours} hrs</td></tr>
+                <tr><td>Origin hotspots</td><td>${mv.hotspot_count_origin}</td></tr>
+                <tr><td>Dest hotspots</td><td>${mv.hotspot_count_destination}</td></tr>
+              </table>
+
+              <div class="popup-score-bar">
+                <div style="display:flex;justify-content:space-between;font-size:11px">
+                  <span style="color:#8b949e">Confidence</span>
+                  <span style="color:${color};font-weight:700">${confPct}%</span>
+                </div>
+                <div class="score-bar-bg"><div class="score-bar-fill" style="width:${confPct}%;background:${color}"></div></div>
+              </div>
+
+              <!-- ACTION BUTTONS -->
+              <div style="margin-top:10px;display:flex;gap:6px">
+                <a href="${originGmaps}" target="_blank" rel="noopener"
+                   style="flex:1;text-align:center;background:#2563eb;color:white;padding:7px;border-radius:4px;text-decoration:none;font-size:11px;font-weight:600">
+                  📍 Origin Map
+                </a>
+                <a href="${destGmaps}" target="_blank" rel="noopener"
+                   style="flex:1;text-align:center;background:#dc2626;color:white;padding:7px;border-radius:4px;text-decoration:none;font-size:11px;font-weight:600">
+                  📍 Destination Map
+                </a>
+              </div>
+            </div>
+          `;
+
+          line.bindPopup(popupHtml, { maxWidth: 300 });
+          arrow.bindPopup(popupHtml, { maxWidth: 300 });
+
+          movementLayerGroup.addLayer(line);
+          movementLayerGroup.addLayer(arrow);
+          movementLayerGroup.addLayer(origin);
+        });
+
+        movementLayerGroup.addTo(map);
+
+        // Update legend count
+        if (el('leg-movements')) el('leg-movements').textContent = movements.length;
+      }
+
+      function toggleMovementLayer() {
+        movementLayerVisible = !movementLayerVisible;
+        el('movement-toggle').classList.toggle('active', movementLayerVisible);
+        if (movementLayerVisible && !movementData) {
+          loadMovementData();
+        } else {
+          renderMovementLayer();
         }
       }
 
@@ -839,7 +1426,7 @@
             fillOpacity: 0.08, dashArray: '8 4',
           });
           rect.bindTooltip(`<strong>${z.name}</strong><br><span style="color:${color}">${z.risk_level.toUpperCase()}</span> — ${z.description}`, {
-            sticky: true, className: '',
+            sticky: true,
           });
           zonesLayerGroup.addLayer(rect);
         });
@@ -929,6 +1516,7 @@
         const c = el('panel-content');
         if (currentTab === 'states') renderStatesPanel(c);
         else if (currentTab === 'threats') renderThreatsPanel(c);
+        else if (currentTab === 'alerts') renderAlertsPanel(c);
         else if (currentTab === 'vegetation') renderVegetationPanel(c);
         else if (currentTab === 'tiers') renderTiersPanel(c);
       }
@@ -1001,11 +1589,170 @@
         `).join('');
       }
 
-            // ════════════════════════════════════════════════════════
+      // ════════════════════════════════════════════════════════
+      //  ALERTS PANEL
+      // ════════════════════════════════════════════════════════
+      function renderAlertsPanel(container) {
+        // Section 1: Movement summary
+        let movementHtml = '<div class="legend-title" style="margin-bottom:10px">MOVEMENT ANALYSIS</div>';
+
+        if (!movementData) {
+          movementHtml += `
+            <div class="veg-empty" style="padding:16px">
+              <div class="veg-empty-icon">🧭</div>
+              <div style="font-size:13px;margin-bottom:6px">No movement data loaded</div>
+              <button class="veg-run-btn" onclick="loadMovementData().then(() => { if(currentTab==='alerts') renderAlertsPanel(el('panel-content')); })" style="margin-top:8px">
+                ▶ Analyse Movement
+              </button>
+            </div>
+          `;
+        } else {
+          const mv = movementData;
+          const summary = mv.summary || {};
+          movementHtml += `
+            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+              <span style="font-size:11px;padding:3px 8px;border-radius:4px;background:#ff6b3522;color:#ff6b35;border:1px solid #ff6b3544">
+                🏕️ ${summary.camp_relocations || 0} Camp Relocations
+              </span>
+              <span style="font-size:11px;padding:3px 8px;border-radius:4px;background:#d2992222;color:#d29922;border:1px solid #d2992244">
+                🛤️ ${summary.corridor_movements || 0} Corridor Movements
+              </span>
+              <span style="font-size:11px;padding:3px 8px;border-radius:4px;background:#f8514922;color:#f85149;border:1px solid #f8514944">
+                ⚡ ${summary.rapid_relocations || 0} Rapid Relocations
+              </span>
+            </div>
+          `;
+
+          // Movement vectors
+          const movements = mv.movements || [];
+          if (movements.length > 0) {
+            movementHtml += movements.slice(0, 20).map((m, i) => {
+              const color = m.classification === 'rapid_relocation' ? '#f85149'
+                : m.classification === 'corridor' ? '#d29922' : '#ff6b35';
+              const confPct = (m.confidence * 100).toFixed(0);
+              return `
+                <div class="movement-item" onclick="zoomTo(${m.destination_lat},${m.destination_lon})">
+                  <div class="movement-item-header">
+                    <span style="color:#8b949e;font-size:11px">#${i + 1}</span>
+                    <span class="movement-class-badge ${m.classification}" style="background:${color}22;color:${color};border:1px solid ${color}55">
+                      ${m.classification.replace(/_/g, ' ')}
+                    </span>
+                    <span style="margin-left:auto;font-size:12px;font-weight:700;color:${color}">${m.distance_km} km</span>
+                  </div>
+                  <div class="movement-item-detail">
+                    📍 ${m.origin_state || '—'} → ${m.destination_state || '—'} ·
+                    🧭 ${m.bearing_degrees}° · ⏱️ ${m.speed_kmh} km/h ·
+                    🎯 ${confPct}%
+                  </div>
+                </div>
+              `;
+            }).join('');
+          } else {
+            movementHtml += '<div style="font-size:12px;color:#8b949e;padding:8px 0">No movements detected in this period.</div>';
+          }
+        }
+
+        // Section 2: Active alerts
+        let alertsHtml = '<div class="legend-title" style="margin-top:20px;margin-bottom:10px">ACTIVE ALERTS</div>';
+
+        if (activeAlerts.length === 0) {
+          alertsHtml += `
+            <div class="veg-empty" style="padding:16px">
+              <div class="veg-empty-icon">🚨</div>
+              <div style="font-size:13px;margin-bottom:6px">No active alerts</div>
+              <div style="font-size:11px">Alerts are generated when movement patterns are detected.</div>
+            </div>
+          `;
+        } else {
+          // Summary
+          const alertsByPriority = { critical: 0, high: 0, medium: 0, low: 0 };
+          activeAlerts.forEach(a => {
+            const p = a.priority || 'low';
+            if (alertsByPriority[p] !== undefined) alertsByPriority[p]++;
+          });
+
+          alertsHtml += `
+            <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+              ${alertsByPriority.critical > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#f8514922;color:#f85149">● ${alertsByPriority.critical} CRITICAL</span>` : ''}
+              ${alertsByPriority.high > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#ff6b3522;color:#ff6b35">● ${alertsByPriority.high} HIGH</span>` : ''}
+              ${alertsByPriority.medium > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#d2992222;color:#d29922">● ${alertsByPriority.medium} MEDIUM</span>` : ''}
+              ${alertsByPriority.low > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#3fb95022;color:#3fb950">● ${alertsByPriority.low} LOW</span>` : ''}
+            </div>
+          `;
+
+          // Sort: critical first
+          const sortedAlerts = [...activeAlerts].sort((a, b) => {
+            const order = { critical: 0, high: 1, medium: 2, low: 3 };
+            return (order[a.priority] ?? 4) - (order[b.priority] ?? 4);
+          });
+
+          alertsHtml += sortedAlerts.slice(0, 30).map(alert => {
+            const color = alertPriorityColor(alert.priority);
+            const evidence = (alert.evidence || []).slice(0, 4);
+            return `
+              <div class="alert-item" onclick="zoomTo(${alert.latitude || 0},${alert.longitude || 0})">
+                <div class="alert-item-header">
+                  <span class="alert-priority-badge ${alert.priority}" style="background:${color}22;color:${color};border:1px solid ${color}55">
+                    ${(alert.priority || 'low').toUpperCase()}
+                  </span>
+                  <span class="alert-item-title">${alert.title || 'Alert'}</span>
+                </div>
+                <div class="alert-item-detail">${alert.description || ''}</div>
+                ${evidence.length > 0 ? `
+                  <div class="alert-item-evidence">
+                    ${evidence.map(e => `<div>• ${e}</div>`).join('')}
+                  </div>
+                ` : ''}
+                ${alert.recommended_action ? `
+                  <div class="alert-item-action">
+                    <strong>⚡ Action:</strong> ${alert.recommended_action}
+                  </div>
+                ` : ''}
+                <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+                  <span style="font-size:10px;color:#8b949e">
+                    📍 ${alert.state || '—'} · ${alert.zone || '—'}
+                    ${alert.timestamp ? ` · ${new Date(alert.timestamp).toLocaleString()}` : ''}
+                  </span>
+                  <button class="alert-dismiss-btn" onclick="event.stopPropagation(); dismissAlertById('${alert.alert_id}', this)">
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+
+        // Section 3: Quick actions
+        let actionsHtml = `
+          <div class="legend-title" style="margin-top:20px;margin-bottom:10px">QUICK ACTIONS</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <button class="veg-run-btn" onclick="loadMovementData().then(() => { if(currentTab==='alerts') renderAlertsPanel(el('panel-content')); })" style="width:100%;text-align:center">
+              🧭 Refresh Movement Analysis
+            </button>
+            <button class="veg-run-btn" onclick="loadActiveAlerts().then(() => { if(currentTab==='alerts') renderAlertsPanel(el('panel-content')); })" style="width:100%;text-align:center;background:#21262d;border-color:#30363d;color:#e6edf3">
+              ↻ Refresh Alerts
+            </button>
+            <button class="veg-run-btn" onclick="clearExpiredAlerts(this)" style="width:100%;text-align:center;background:#21262d;border-color:#30363d;color:#e6edf3">
+              🧹 Clear Expired Alerts
+            </button>
+            <a href="/api/alerts/summary" target="_blank"
+              style="display:block;text-align:center;font-size:11px;color:#58a6ff;padding:6px;text-decoration:none">
+              📥 View Alert Summary JSON
+            </a>
+            <a href="/api/v1/hotspots/intel/brief" target="_blank"
+              style="display:block;text-align:center;font-size:11px;color:#58a6ff;padding:6px;text-decoration:none">
+              📋 Full Intelligence Brief
+            </a>
+          </div>
+        `;
+
+        container.innerHTML = movementHtml + alertsHtml + actionsHtml;
+      }
+
+      // ════════════════════════════════════════════════════════
       //  VEGETATION PANEL
       // ════════════════════════════════════════════════════════
       function renderVegetationPanel(container) {
-        // Section 1: Monitoring Zones with run buttons
         let zonesHtml = '<div class="legend-title" style="margin-bottom:10px">MONITORING ZONES</div>';
 
         if (monitoringZones.length === 0) {
@@ -1036,7 +1783,6 @@
           }).join('');
         }
 
-        // Section 2: Detected Events
         let eventsHtml = '<div class="legend-title" style="margin-top:20px;margin-bottom:10px">DETECTED CHANGES</div>';
 
         if (vegEvents.length === 0) {
@@ -1053,7 +1799,6 @@
             </div>
           `;
         } else {
-          // Summary stats
           const clsCount = { clearing: 0, burn_scar: 0, regrowth: 0 };
           const sevCount = { critical: 0, high: 0, moderate: 0, low: 0 };
           vegEvents.forEach(e => {
@@ -1081,7 +1826,6 @@
             </div>
           `;
 
-          // Sort events: critical first, then by confidence
           const sorted = [...vegEvents].sort((a, b) => {
             const sevOrder = { critical: 0, high: 1, moderate: 2, low: 3 };
             const sa = sevOrder[a.severity] ?? 4;
@@ -1120,7 +1864,6 @@
           }).join('');
         }
 
-        // Section 3: Quick actions
         let actionsHtml = `
           <div class="legend-title" style="margin-top:20px;margin-bottom:10px">QUICK ACTIONS</div>
           <div style="display:flex;flex-direction:column;gap:6px">
@@ -1204,6 +1947,139 @@
       }
 
       // ════════════════════════════════════════════════════════
+      //  ALERTS & MOVEMENT DATA LOADERS
+      // ════════════════════════════════════════════════════════
+      async function loadActiveAlerts() {
+        try {
+          const res = await fetch('/api/alerts');
+          if (!res.ok) {
+            console.warn('[Alerts] Endpoint returned', res.status);
+            activeAlerts = [];
+            return;
+          }
+          const data = await res.json();
+          activeAlerts = data.alerts || [];
+
+          // Update stats bar
+          el('stat-alerts').textContent = `🚨 ${activeAlerts.length}`;
+
+          // Update component pill
+          const pill = el('comp-alerts');
+          if (activeAlerts.length > 0) {
+            pill.classList.add('active');
+            pill.classList.remove('inactive');
+            pill.title = `${activeAlerts.length} active alerts`;
+          } else {
+            pill.classList.remove('active');
+            pill.classList.remove('inactive');
+            pill.title = 'No active alerts';
+          }
+
+          console.log(`[EagleEye] Loaded ${activeAlerts.length} active alerts`);
+        } catch (err) {
+          console.warn('[Alerts] Failed to load:', err);
+          activeAlerts = [];
+          el('stat-alerts').textContent = '🚨 —';
+        }
+      }
+
+      async function loadMovementData() {
+        try {
+          const days = parseInt(el('days-select').value) || 1;
+          const compareDays = Math.min(days + 2, 10);
+          const res = await fetch(`/api/v1/hotspots/movement?days=${days}&compare_days=${compareDays}`);
+          if (!res.ok) {
+            console.warn('[Movement] Endpoint returned', res.status);
+            return;
+          }
+          movementData = await res.json();
+
+          // Extract alerts from movement response
+          if (movementData.alerts && movementData.alerts.length > 0) {
+            movementAlerts = movementData.alerts;
+            // Merge into activeAlerts (avoid duplicates by alert_id)
+            const existingIds = new Set(activeAlerts.map(a => a.alert_id));
+            movementData.alerts.forEach(a => {
+              if (!existingIds.has(a.alert_id)) {
+                activeAlerts.push(a);
+              }
+            });
+            el('stat-alerts').textContent = `🚨 ${activeAlerts.length}`;
+          }
+
+          // Update legend
+          if (el('leg-movements')) {
+            el('leg-movements').textContent = (movementData.movements || []).length;
+          }
+
+          renderMovementLayer();
+          console.log(`[EagleEye] Movement analysis: ${(movementData.movements || []).length} movements, ${(movementData.alerts || []).length} alerts`);
+        } catch (err) {
+          console.warn('[Movement] Failed to load:', err);
+          if (err.message && err.message.includes('not available')) {
+            console.info('[Movement] Movement tracker service not available');
+          }
+        }
+      }
+
+      async function dismissAlertById(alertId, btnEl) {
+        try {
+          btnEl.textContent = '...';
+          btnEl.disabled = true;
+
+          const res = await fetch(`/api/alerts/${alertId}`, { method: 'DELETE' });
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+
+          // Remove from local state
+          activeAlerts = activeAlerts.filter(a => a.alert_id !== alertId);
+          el('stat-alerts').textContent = `🚨 ${activeAlerts.length}`;
+
+          // Re-render panel
+          if (currentTab === 'alerts') {
+            renderAlertsPanel(el('panel-content'));
+          }
+        } catch (err) {
+          console.error('[Alerts] Dismiss failed:', err);
+          btnEl.textContent = 'Failed';
+          btnEl.disabled = false;
+          setTimeout(() => { btnEl.textContent = 'Dismiss'; }, 2000);
+        }
+      }
+
+      async function clearExpiredAlerts(btnEl) {
+        try {
+          btnEl.disabled = true;
+          btnEl.textContent = '⏳ Clearing...';
+
+          const res = await fetch('/api/alerts/clear-expired', { method: 'POST' });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+          const data = await res.json();
+          btnEl.textContent = `✓ Removed ${data.removed}, ${data.remaining} remaining`;
+          btnEl.style.background = '#1f3a1f';
+
+          // Reload alerts
+          await loadActiveAlerts();
+          if (currentTab === 'alerts') renderAlertsPanel(el('panel-content'));
+
+          setTimeout(() => {
+            btnEl.disabled = false;
+            btnEl.textContent = '🧹 Clear Expired Alerts';
+            btnEl.style.background = '';
+          }, 3000);
+        } catch (err) {
+          console.error('[Alerts] Clear failed:', err);
+          btnEl.textContent = '✗ Failed';
+          setTimeout(() => {
+            btnEl.disabled = false;
+            btnEl.textContent = '🧹 Clear Expired Alerts';
+          }, 2000);
+        }
+      }
+
+      // ════════════════════════════════════════════════════════
       //  RUN ANALYSIS FROM DASHBOARD
       // ════════════════════════════════════════════════════════
       async function runZoneAnalysis(zoneId, btnEl) {
@@ -1238,26 +2114,21 @@
           btnEl.style.background = '#1f3a1f';
           btnEl.style.borderColor = '#238636';
 
-          // Refresh events to pick up new results
           await loadVegetationEvents();
 
-          // Auto-enable veg layer if not visible
           if (!vegLayerVisible && job.events_found > 0) {
             vegLayerVisible = true;
             el('veg-toggle').classList.add('veg-active');
             renderVegetationLayer();
           }
 
-          // Zoom to zone
           const zone = monitoringZones.find(z => z.zone_id === zoneId);
           if (zone) zoomToBbox(zone.bbox);
 
-          // Update panel
           if (currentTab === 'vegetation') renderVegetationPanel(el('panel-content'));
 
           console.log(`[EagleEye] Zone ${zoneId}: ${job.events_found} events detected`);
 
-          // Reset button after 3s
           setTimeout(() => {
             btnEl.disabled = false;
             btnEl.textContent = '▶ Run Analysis';
@@ -1363,7 +2234,7 @@
       }
 
       // ════════════════════════════════════════════════════════
-      //  ALERTS
+      //  ALERTS & BANNER
       // ════════════════════════════════════════════════════════
       function checkAlerts(features, summary) {
         const critCount = summary.threat_breakdown?.critical || 0;
@@ -1385,166 +2256,203 @@
           banner.classList.remove('visible');
         }
 
-        // Also check for critical vegetation events
+        // Check for critical vegetation events
         const critVeg = vegEvents.filter(e => e.severity === 'critical');
         if (critVeg.length > 0 && critCount === 0) {
           text.textContent = `🌿 ${critVeg.length} CRITICAL vegetation change(s) detected — possible encampment activity`;
           banner.classList.add('visible');
         }
+
+        // Check for critical movement alerts
+        const critAlerts = activeAlerts.filter(a => a.priority === 'critical');
+        if (critAlerts.length > 0) {
+          const existingText = text.textContent;
+          const alertMsg = `🚨 ${critAlerts.length} CRITICAL movement alert(s) — ${critAlerts.map(a => a.state || 'Unknown').join(', ')}`;
+          text.textContent = critCount > 0 || critVeg.length > 0
+            ? existingText + ' | ' + alertMsg
+            : alertMsg;
+          banner.classList.add('visible');
+        }
       }
 
       // ════════════════════════════════════════════════════════
-      //  HEALTH CHECK — COMPONENT PILLS
+      //  HEALTH CHECK
       // ════════════════════════════════════════════════════════
-      async function loadHealthStatus() {
+      async function checkHealth() {
         try {
           const res = await fetch('/health');
           if (!res.ok) return;
           const data = await res.json();
           const c = data.components || {};
 
-          // FIRMS
           const firmsPill = el('comp-firms');
-          firmsPill.classList.toggle('active', c.firms_data === true);
-          firmsPill.classList.toggle('inactive', c.firms_data !== true);
+          if (c.firms_data) {
+            firmsPill.classList.add('active');
+            firmsPill.classList.remove('inactive');
+          } else {
+            firmsPill.classList.add('inactive');
+            firmsPill.classList.remove('active');
+          }
 
-          // ACLED
           const acledPill = el('comp-acled');
-          acledPill.classList.toggle('active', c.acled === true);
-          acledPill.classList.toggle('inactive', c.acled !== true);
-
-          // Sentinel-2 is handled by its own health endpoint
+          if (c.acled) {
+            acledPill.classList.add('active');
+            acledPill.classList.remove('inactive');
+          } else {
+            acledPill.classList.add('inactive');
+            acledPill.classList.remove('active');
+          }
         } catch (err) {
           console.warn('[Health] Check failed:', err);
         }
       }
 
       // ════════════════════════════════════════════════════════
-      //  MAIN DATA LOADERS
+      //  MAIN DATA LOAD
       // ════════════════════════════════════════════════════════
-      async function loadHotspots() {
-        const days = el('days-select').value;
+      async function loadAllData() {
+        const loading = el('loading');
+        const loadingText = el('loading-text');
         const refreshBtn = el('refresh-btn');
-        const loadingEl = el('loading');
 
-        loadingEl.classList.remove('hidden');
-        loadingEl.style.display = 'flex';
-        el('loading-text').textContent = 'Fetching satellite data from NASA FIRMS...';
+        loading.classList.remove('hidden');
+        loadingText.textContent = 'Fetching satellite data from NASA FIRMS...';
         refreshBtn.disabled = true;
-        refreshBtn.textContent = '⏳ Loading...';
         setStatus('loading');
 
+        const days = el('days-select').value;
+
         try {
-          const [geoRes, sumRes] = await Promise.all([
-            fetch(`/api/v1/hotspots?days=${days}`),
-            fetch(`/api/v1/hotspots/summary?days=${days}`),
-          ]);
+          // ── Fetch hotspots ──
+          loadingText.textContent = 'Fetching thermal hotspots...';
+          const hotspotRes = await fetch(`/api/v1/hotspots?days=${days}`);
+          if (!hotspotRes.ok) throw new Error(`Hotspot API: ${hotspotRes.status}`);
+          const hotspotData = await hotspotRes.json();
+          allFeatures = hotspotData.features || [];
 
-          if (!geoRes.ok || !sumRes.ok) throw new Error(`API error ${geoRes.status}/${sumRes.status}`);
+          // ── Fetch summary ──
+          loadingText.textContent = 'Loading threat analysis...';
+          const summaryRes = await fetch(`/api/v1/hotspots/summary?days=${days}`);
+          if (summaryRes.ok) {
+            summaryData = await summaryRes.json();
+          }
 
-          const geo = await geoRes.json();
-          const summary = await sumRes.json();
-
-          allFeatures = geo.features || [];
-          summaryData = summary;
-
-          // Stats
-          el('stat-total').textContent = summary.total ?? 0;
-          el('stat-high').textContent = `🔴 ${summary.high_confidence ?? 0}`;
-          el('stat-medium').textContent = `🟡 ${summary.medium_confidence ?? 0}`;
-          el('stat-low').textContent = `🟢 ${summary.low_confidence ?? 0}`;
-          el('stat-updated').textContent = new Date().toLocaleTimeString();
-
-          // Threat pills
-          const tb = summary.threat_breakdown || {};
-          el('pill-critical').textContent = tb.critical ?? 0;
-          el('pill-high').textContent = tb.high ?? 0;
-          el('pill-elevated').textContent = tb.elevated ?? 0;
-          el('pill-monitor').textContent = tb.monitor ?? 0;
-
-          // Top score
-          el('stat-top-score').textContent = summary.top_threat_score ?? '—';
-
-          // Source
-          const src = geo.metadata?.source || 'NASA FIRMS';
-          const sensor = geo.metadata?.sensor || 'VIIRS SNPP NRT';
-          const scored = geo.metadata?.scored ? ' · Scored' : '';
-          el('source-note').textContent =
-            `Source: ${src} · ${sensor} · ${allFeatures.length} detections${scored}` +
-            (vegEvents.length > 0 ? ` · ${vegEvents.length} veg changes` : '');
-
-          // Status
-          if (src.includes('MOCK')) setStatus('mock');
-          else setStatus('live');
-
-          // Zone stats
+          // ── Render hotspots ──
+          renderHotspots(allFeatures);
           updateZoneStats(allFeatures);
 
-          // Alerts
-          checkAlerts(allFeatures, summary);
+          // ── Update stats bar ──
+          el('stat-total').textContent = summaryData.total || allFeatures.length;
 
-          // Render
-          applyFilter();
+          el('stat-high').textContent = `🔴 ${summaryData.high_confidence || 0}`;
+          el('stat-medium').textContent = `🟡 ${summaryData.medium_confidence || 0}`;
+          el('stat-low').textContent = `🟢 ${summaryData.low_confidence || 0}`;
 
-          // Update side panel if open
-          if (el('side-panel').classList.contains('open')) updatePanelContent();
+          const tb = summaryData.threat_breakdown || {};
+          el('pill-critical').textContent = tb.critical || 0;
+          el('pill-high').textContent = tb.high || 0;
+          el('pill-elevated').textContent = tb.elevated || 0;
+          el('pill-monitor').textContent = tb.monitor || 0;
 
-          console.log(`[EagleEye] Loaded ${allFeatures.length} hotspots (${tb.critical||0} critical) for ${days} day(s)`);
+          el('stat-top-score').textContent = summaryData.top_threat_score || '—';
+          if (summaryData.top_threat_score) {
+            el('stat-top-score').style.color = scoreColor(summaryData.top_threat_score);
+          }
+
+          el('stat-updated').textContent = new Date().toLocaleTimeString();
+
+          // ── Load secondary data in parallel ──
+          loadingText.textContent = 'Loading intelligence layers...';
+
+          await Promise.allSettled([
+            checkHealth(),
+            loadSentinel2Health(),
+            loadVegetationEvents(),
+            loadMonitoringZones(),
+            loadActiveAlerts(),
+            loadMovementData(),
+          ]);
+
+          // ── Check alerts ──
+          checkAlerts(allFeatures, summaryData);
+
+          // ── Done ──
+          setStatus('live');
+          loading.classList.add('hidden');
+
+          console.log(`[EagleEye] Dashboard loaded: ${allFeatures.length} hotspots, ${vegEvents.length} veg events, ${activeAlerts.length} alerts`);
 
         } catch (err) {
-          console.error('Failed to load hotspots:', err);
+          console.error('[EagleEye] Load failed:', err);
           setStatus('error');
-          el('stat-total').textContent = 'ERR';
+          loadingText.textContent = `Error: ${err.message}. Retrying...`;
+
+          // Retry once after 3 seconds
+          setTimeout(async () => {
+            try {
+              loadingText.textContent = 'Retrying...';
+              const retryRes = await fetch(`/api/v1/hotspots?days=${days}`);
+              if (retryRes.ok) {
+                const retryData = await retryRes.json();
+                allFeatures = retryData.features || [];
+                renderHotspots(allFeatures);
+                updateZoneStats(allFeatures);
+                el('stat-total').textContent = allFeatures.length;
+                el('stat-updated').textContent = new Date().toLocaleTimeString();
+                setStatus('live');
+              } else {
+                setStatus('error');
+              }
+            } catch (retryErr) {
+              console.error('[EagleEye] Retry failed:', retryErr);
+              setStatus('error');
+            }
+            loading.classList.add('hidden');
+          }, 3000);
         } finally {
-          loadingEl.classList.add('hidden');
-          setTimeout(() => { loadingEl.style.display = 'none'; }, 300);
           refreshBtn.disabled = false;
-          refreshBtn.textContent = '↻ Refresh';
         }
       }
 
-      async function loadAllData() {
-        await Promise.all([
-          loadHotspots(),
-          loadVegetationEvents(),
-        ]);
-      }
-
       // ════════════════════════════════════════════════════════
-      //  EVENT LISTENERS
+      //  KEYBOARD SHORTCUTS
       // ════════════════════════════════════════════════════════
-      el('days-select').addEventListener('change', loadHotspots);
-
       document.addEventListener('keydown', e => {
+        // Don't intercept when typing in inputs
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
-        if (e.key === 'r' && !e.ctrlKey && !e.metaKey) loadAllData();
-        if (e.key === 'c' && !e.ctrlKey && !e.metaKey) toggleClustering();
-        if (e.key === 'v' && !e.ctrlKey && !e.metaKey) toggleVegetationLayer();
-        if (e.key === 'z' && !e.ctrlKey && !e.metaKey) toggleMonitoringZones();
-        if (e.key === 'i' && !e.ctrlKey && !e.metaKey) toggleSidePanel();
-        if (e.key === 'Escape') {
-          if (el('side-panel').classList.contains('open')) toggleSidePanel();
+
+        switch (e.key.toLowerCase()) {
+          case 'r': loadAllData(); break;
+          case 'c': toggleClustering(); break;
+          case 'v': toggleVegetationLayer(); break;
+          case 'm': toggleMovementLayer(); break;
+          case 'z': toggleMonitoringZones(); break;
+          case 'i': toggleSidePanel(); break;
+          case 'escape':
+            if (el('side-panel').classList.contains('open')) toggleSidePanel();
+            break;
         }
       });
 
       // ════════════════════════════════════════════════════════
-      //  INIT
+      //  DAY SELECTOR CHANGE
       // ════════════════════════════════════════════════════════
-      (async function init() {
-        // Load health status and zones in parallel with hotspots
-        await Promise.all([
-          loadHotspots(),
-          loadHealthStatus(),
-          loadSentinel2Health(),
-          loadMonitoringZones(),
-        ]);
+      el('days-select').addEventListener('change', () => {
+        loadAllData();
+      });
 
-        // Try loading vegetation events (non-blocking)
-        loadVegetationEvents();
-      })();
+      // ════════════════════════════════════════════════════════
+      //  AUTO-REFRESH (every 5 minutes)
+      // ════════════════════════════════════════════════════════
+      let autoRefreshInterval = setInterval(() => {
+        console.log('[EagleEye] Auto-refreshing data...');
+        loadAllData();
+      }, 5 * 60 * 1000);
 
-      // Auto-refresh every 5 minutes
-      setInterval(loadAllData, 5 * 60 * 1000);
+      // ════════════════════════════════════════════════════════
+      //  INITIAL LOAD
+      // ════════════════════════════════════════════════════════
+      loadAllData();
     </script>
   </body>
 </html>
