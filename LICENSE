@@ -1,21 +1,44 @@
-MIT License
+# EagleEye-Nigeria License
 
-Copyright (c) 2026 Olawale Rasaki Olafisoye
+Copyright (c) 2025 Olawale Rasaki Olafisoye
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## Responsible Use Restriction
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+In addition to the MIT License terms below, this software is subject
+to the following binding restriction:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+**This software, in whole or in part, may NOT be used to:**
+
+1. Plan, coordinate, support, or facilitate acts of violence, terrorism,
+   or armed attacks against any person or group
+2. Track, target, or surveil civilian populations without lawful authority
+3. Conduct unauthorized military or paramilitary operations
+4. Violate the laws of the Federal Republic of Nigeria, the Geneva
+   Conventions, or any applicable international humanitarian law
+5. Provide tactical advantage to any non-state armed group, insurgency,
+   or criminal organization
+
+Any use in violation of these restrictions automatically terminates
+the license granted below and may be subject to legal action.
+
+## MIT License Terms
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice, this permission notice, and the Responsible
+Use Restriction shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
