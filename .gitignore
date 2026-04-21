@@ -1,9 +1,23 @@
-# Environment
+# ══════════════════════════════════════
+# EagleEye-Nigeria .gitignore
+# ══════════════════════════════════════
+
+# ── Environment & Secrets ──
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.cert
 
-# Python
+# ── Google Cloud / GEE Credentials ──
+credentials.json
+service_account.json
+*-service-account.json
+focuselite-*.json
+**/earthengine/credentials
+
+# ── Python ──
 __pycache__/
 *.py[cod]
 *.pyo
@@ -22,59 +36,81 @@ develop-eggs/
 lib/
 lib64/
 
-# Virtual environments
+# ── Virtual Environments ──
 .venv/
 venv/
 ENV/
 env/
 
-# Jupyter
+# ── Jupyter ──
 .ipynb_checkpoints/
 *.ipynb
 
-# ML / models
+# ══════════════════════════════════════
+# ML — Keep code, EXCLUDE all data
+# ══════════════════════════════════════
+ml/data/
+ml/logs/
+ml/weights/
+ml/runs/
+ml/__pycache__/
+
+# ── Model files ──
 *.pt
 *.pth
 *.onnx
 *.pkl
 *.h5
-models/weights/
-runs/
+*.safetensors
 
-# Geospatial / data
+# ── Image datasets ──
+*.png
+*.jpg
+*.jpeg
+*.bmp
 *.tif
 *.tiff
-*.geojson
+!dashboard/static/**/*.png
+!dashboard/static/**/*.jpg
+!static/**/*.png
+!static/**/*.jpg
+
+# ── Geospatial data ──
 *.shp
 *.shx
 *.dbf
 *.prj
+*.geojson
+!dashboard/static/**/*.geojson
+
+# ── App data caches ──
+data/alerts/
+data/geocode_cache/
+data/sentinel2_cache/
+data/snapshots/
 data/raw/
 data/processed/
 
-# Logs
+# ── Database ──
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Logs ──
 *.log
 logs/
 
-# OS
+# ── Test cache ──
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── OS ──
 .DS_Store
 Thumbs.db
 
-# IDE
+# ── IDE ──
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# Google Earth Engine credentials
-credentials.json
-service_account.json
-~/.config/earthengine/
-
-# Google Cloud Service Account Keys
-focuselite-7be73e7f766f.json
-*.json
-!package.json
-!package-lock.json
-!tsconfig.json
-!requirements.json
