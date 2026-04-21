@@ -2,7 +2,6 @@
 api/auth/seed.py
 ────────────────
 Create the initial superadmin account on first startup.
-Uses PostgreSQL native UUID.
 """
 
 import os
@@ -13,7 +12,7 @@ from api.auth.security import hash_password
 
 
 def seed_admin(db: Session):
-    """Create default superadmin if no users exist in PostgreSQL."""
+    """Create default superadmin if no users exist."""
     try:
         user_count = db.query(func.count(User.id)).scalar()
 
@@ -22,13 +21,9 @@ def seed_admin(db: Session):
             return
 
         admin_email = os.getenv("FIRST_ADMIN_EMAIL", "admin@eagleeye.ng")
-        admin_password = os.getenv(
-            "FIRST_ADMIN_PASSWORD", "change-this-immediately",
-        )
+        admin_password = os.getenv("FIRST_ADMIN_PASSWORD", "change-this-immediately")
 
-        # Truncate to bcrypt's 72-byte limit
         if len(admin_password.encode("utf-8")) > 72:
-            print("[AUTH] ⚠ Admin password exceeds 72 bytes — truncating for bcrypt")
             admin_password = admin_password[:72]
 
         admin = User(

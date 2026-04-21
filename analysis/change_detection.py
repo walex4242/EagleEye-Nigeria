@@ -441,31 +441,62 @@ class ChangeDetectionPipeline:
                 index=veg_index,
             )
 
-                      # ── Finalise ──────────────────────────────────────
+            # ── Finalise ──────────────────────────────────────
             job.status = "completed"
             job.completed_at = datetime.utcnow().isoformat() + "Z"
             job.events_found = len(events)
 
-            # ── Enrich events with location names ─────────   # ← ADD THIS BLOCK
+                        # ── Enrich events with state/LGA (local, instant) ─
             enriched_events = []
             for e in events:
+                event_dict = e.to_dict()
                 try:
                     from utils.geocoding import reverse_geocode
                     loc = reverse_geocode(
                         e.latitude, e.longitude,
-                        use_nominatim=True,
+                        use_nominatim=False,  # Local only — instant, no rate limits
                     )
-                    event_dict = e.to_dict()
-                    event_dict["location"] = loc.to_dict()
-                    event_dict["operational_description"] = loc.operational_description
-                    event_dict["google_maps_url"] = loc.google_maps_url
                     event_dict["state"] = loc.state
                     event_dict["lga"] = loc.lga
                     event_dict["nearest_town"] = loc.nearest_town
-                    enriched_events.append(event_dict)
+                    event_dict["nearest_town_distance_km"] = loc.nearest_town_distance_km
+                    event_dict["nearest_town_direction"] = loc.nearest_town_direction
+                    event_dict["geo_zone"] = loc.geo_zone
+                    event_dict["state_capital"] = loc.state_capital
+                    event_dict["coords_dms"] = loc.coords_dms
+                    event_dict["google_maps_url"] = loc.google_maps_url
+                    event_dict["operational_description"] = loc.operational_description
+                    event_dict["additional_context"] = loc.additional_context
+                    event_dict["location"] = loc.to_dict()
+                    print(
+                        f"[CD]   Event {e.event_id[:20]}... → "
+                        f"{loc.state}, {loc.lga}, near {loc.nearest_town}"
+                    )
                 except Exception as loc_err:
-                    print(f"[CD] ⚠ Location enrichment failed for event: {loc_err}")
-                    enriched_events.append(e.to_dict())
+                    print(
+                        f"[CD] ⚠ Location enrichment failed for "
+                        f"({e.latitude}, {e.longitude}): {loc_err}"
+                    )
+                    import traceback
+                    traceback.print_exc()
+                    # Fallback: provide empty fields so frontend
+                    # doesn't show "undefined"
+                    event_dict.setdefault("state", "Unknown")
+                    event_dict.setdefault("lga", "Unknown LGA")
+                    event_dict.setdefault("nearest_town", "")
+                    event_dict.setdefault("nearest_town_distance_km", 0)
+                    event_dict.setdefault("nearest_town_direction", "")
+                    event_dict.setdefault("geo_zone", "")
+                    event_dict.setdefault("state_capital", "")
+                    event_dict.setdefault("coords_dms", "")
+                    event_dict.setdefault("google_maps_url",
+                        f"https://www.google.com/maps/search/?api=1&query={e.latitude},{e.longitude}"
+                    )
+                    event_dict.setdefault("operational_description", "")
+                    event_dict.setdefault("additional_context", "")
+                    event_dict.setdefault("location", {})
+
+                enriched_events.append(event_dict)
 
             job.events = enriched_events
             job.snapshot_before = snap_before.to_dict()

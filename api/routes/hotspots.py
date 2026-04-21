@@ -2,7 +2,8 @@
 hotspots.py
 ────────────
 API routes for thermal hotspot data with full analysis pipeline.
-Includes movement detection and military intelligence alerts.
+Includes movement detection, military intelligence alerts,
+and 60-minute data delay for anonymous/public users.
 """
 
 from __future__ import annotations
@@ -13,7 +14,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from api.utils.data_delay import (
+    get_data_delay,
+    filter_features_by_delay,
+    add_security_metadata,
+)
 
 router = APIRouter()
 
@@ -21,6 +28,10 @@ router = APIRouter()
 SNAPSHOTS_DIR = Path(__file__).parent.parent.parent / "data" / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
+
+# ══════════════════════════════════════════
+# INTERNAL HELPERS
+# ══════════════════════════════════════════
 
 def _save_snapshot(data: dict[str, Any], label: str) -> None:
     """Save a hotspot snapshot for later movement comparison."""
@@ -35,7 +46,6 @@ def _save_snapshot(data: dict[str, Any], label: str) -> None:
     with open(path, "w") as f:
         json.dump(snapshot, f, indent=2)
 
-    # Keep only the last 50 snapshots
     snapshots = sorted(SNAPSHOTS_DIR.glob("snapshot_*.json"))
     for old in snapshots[:-50]:
         old.unlink(missing_ok=True)
@@ -44,13 +54,12 @@ def _save_snapshot(data: dict[str, Any], label: str) -> None:
 def _extract_clusters(data: dict[str, Any]) -> list[dict[str, Any]]:
     """
     Extract cluster centroids from hotspot data for movement tracking.
-    Groups nearby hotspots into clusters.
+    Groups nearby hotspots into clusters by state.
     """
     features = data.get("features", [])
     if not features:
         return []
 
-    # Group by state/region for simple clustering
     state_groups: dict[str, list[dict[str, float]]] = {}
     for f in features:
         props = f.get("properties", {})
@@ -77,7 +86,10 @@ def _extract_clusters(data: dict[str, Any]) -> list[dict[str, Any]]:
             "state": state,
             "latitude": round(avg_lat, 4),
             "longitude": round(avg_lon, 4),
+            "lat": round(avg_lat, 4),
+            "lon": round(avg_lon, 4),
             "hotspot_count": len(points),
+            "count": len(points),
             "max_score": max_score,
         })
 
@@ -89,8 +101,6 @@ def _get_previous_snapshot() -> dict[str, Any] | None:
     snapshots = sorted(SNAPSHOTS_DIR.glob("snapshot_current_*.json"))
     if len(snapshots) < 2:
         return None
-
-    # Get second-to-last (previous)
     try:
         with open(snapshots[-2]) as f:
             return json.load(f)
@@ -98,33 +108,51 @@ def _get_previous_snapshot() -> dict[str, Any] | None:
         return None
 
 
+def _assess_zone_threat(count: int, max_score: float) -> str:
+    """Generate a human-readable threat assessment."""
+    if max_score >= 80 or count >= 10:
+        return (
+            "CRITICAL — Multiple high-confidence thermal signatures "
+            "suggest active militant/bandit operations. "
+            "Immediate reconnaissance recommended."
+        )
+    if max_score >= 60 or count >= 5:
+        return (
+            "HIGH — Significant thermal activity detected. "
+            "Pattern consistent with camp activity. "
+            "Enhanced monitoring recommended."
+        )
+    if max_score >= 40 or count >= 3:
+        return (
+            "ELEVATED — Moderate thermal activity. "
+            "Could indicate agricultural burning or small settlements. "
+            "Continue routine surveillance."
+        )
+    return (
+        "MONITOR — Low-level activity. "
+        "Likely routine agricultural or natural fires."
+    )
+
+
+# ══════════════════════════════════════════
+# API ROUTES
+# ══════════════════════════════════════════
+
 @router.get("/hotspots")
 def get_hotspots(
-    days: int = Query(
-        default=1, ge=1, le=10,
-        description="Number of past days to fetch",
-    ),
-    country: str = Query(
-        default="NGA",
-        description="Country code (ISO 3166-1 alpha-3)",
-    ),
-    scored: bool = Query(
-        default=True,
-        description="Include threat scoring",
-    ),
-    regions: bool = Query(
-        default=True,
-        description="Include state/region classification",
-    ),
-    track_movement: bool = Query(
-        default=True,
-        description="Save snapshot for movement tracking",
-    ),
+    request: Request,
+    days: int = Query(default=1, ge=1, le=10),
+    country: str = Query(default="NGA"),
+    scored: bool = Query(default=True),
+    regions: bool = Query(default=True),
+    track_movement: bool = Query(default=True),
 ) -> dict[str, Any]:
     """
     Fetch thermal hotspots from NASA FIRMS.
-    Returns a scored, region-enriched GeoJSON FeatureCollection.
+    Anonymous users receive data delayed by 60 minutes.
     """
+    delay_info = get_data_delay(request)
+
     try:
         from ingestion.firms import fetch_hotspots
         data = fetch_hotspots(days=days, country=country)
@@ -137,11 +165,23 @@ def get_hotspots(
             from analysis.anomaly_score import score_hotspots
             data = score_hotspots(data)
 
-        # Save snapshot for movement tracking
+        # Save snapshot BEFORE filtering (full data for movement tracking)
         if track_movement:
             _save_snapshot(data, "current")
 
-        return data
+        # ── Apply delay for anonymous users ──
+        original_count = len(data.get("features", []))
+        if delay_info["delayed"]:
+            data["features"] = filter_features_by_delay(
+                data.get("features", []),
+                delay_info["cutoff_time"],
+            )
+
+        return add_security_metadata(
+            data, delay_info,
+            original_count=original_count,
+            filtered_count=len(data.get("features", [])),
+        )
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -156,11 +196,15 @@ def get_hotspots(
 
 @router.get("/hotspots/summary")
 def get_hotspots_summary(
+    request: Request,
     days: int = Query(default=1, ge=1, le=10),
 ) -> dict[str, Any]:
     """
-    Returns a detailed summary of hotspots including threat breakdown.
+    Detailed summary with threat breakdown.
+    Anonymous users see delayed statistics.
     """
+    delay_info = get_data_delay(request)
+
     try:
         from ingestion.firms import fetch_hotspots
         from analysis.anomaly_score import score_hotspots
@@ -171,6 +215,13 @@ def get_hotspots_summary(
         data = score_hotspots(data)
 
         features = data.get("features", [])
+        original_count = len(features)
+
+        # ── Apply delay ──
+        if delay_info["delayed"]:
+            features = filter_features_by_delay(
+                features, delay_info["cutoff_time"],
+            )
 
         high_conf = sum(
             1 for f in features
@@ -210,7 +261,7 @@ def get_hotspots_summary(
             state = f["properties"].get("state", "Unknown")
             state_counts[state] = state_counts.get(state, 0) + 1
         top_states = sorted(
-            state_counts.items(), key=lambda x: x[1], reverse=True
+            state_counts.items(), key=lambda x: x[1], reverse=True,
         )[:10]
 
         zone_counts: dict[str, int] = {}
@@ -229,7 +280,7 @@ def get_hotspots_summary(
                 f["properties"].get("threat_score", 0) for f in features
             )
 
-        return {
+        result = {
             "total": len(features),
             "high_confidence": high_conf,
             "medium_confidence": med_conf,
@@ -249,6 +300,12 @@ def get_hotspots_summary(
             "threat_tier_breakdown": tier_counts,
         }
 
+        return add_security_metadata(
+            result, delay_info,
+            original_count=original_count,
+            filtered_count=len(features),
+        )
+
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[ERROR] /hotspots/summary failed:\n{tb}")
@@ -257,15 +314,13 @@ def get_hotspots_summary(
 
 @router.get("/hotspots/critical")
 def get_critical_hotspots(
+    request: Request,
     days: int = Query(default=1, ge=1, le=10),
-    min_score: float = Query(
-        default=60.0, ge=0, le=100,
-        description="Minimum threat score",
-    ),
+    min_score: float = Query(default=60.0, ge=0, le=100),
 ) -> dict[str, Any]:
-    """
-    Returns only high-priority hotspots above a given threat score.
-    """
+    """High-priority hotspots above a threat score threshold."""
+    delay_info = get_data_delay(request)
+
     try:
         from ingestion.firms import fetch_hotspots
         from analysis.anomaly_score import score_hotspots
@@ -275,22 +330,32 @@ def get_critical_hotspots(
         data = enrich_with_regions(data)
         data = score_hotspots(data)
 
-        critical_features = [
+        features = [
             f for f in data.get("features", [])
             if f["properties"].get("threat_score", 0) >= min_score
         ]
 
-        return {
+        original_count = len(features)
+        if delay_info["delayed"]:
+            features = filter_features_by_delay(
+                features, delay_info["cutoff_time"],
+            )
+
+        result = {
             "type": "FeatureCollection",
-            "features": critical_features,
+            "features": features,
             "metadata": {
-                "count": len(critical_features),
+                "count": len(features),
                 "min_score_filter": min_score,
-                "source": data.get(
-                    "metadata", {}
-                ).get("source", "NASA FIRMS"),
+                "source": data.get("metadata", {}).get("source", "NASA FIRMS"),
             },
         }
+
+        return add_security_metadata(
+            result, delay_info,
+            original_count=original_count,
+            filtered_count=len(features),
+        )
 
     except Exception as e:
         tb = traceback.format_exc()
@@ -300,19 +365,13 @@ def get_critical_hotspots(
 
 @router.get("/hotspots/changes")
 def get_hotspot_changes(
-    current_days: int = Query(
-        default=1, ge=1, le=5,
-        description="Current snapshot days",
-    ),
-    previous_days: int = Query(
-        default=2, ge=2, le=10,
-        description="Previous snapshot days",
-    ),
+    request: Request,
+    current_days: int = Query(default=1, ge=1, le=10),
+    previous_days: int = Query(default=2, ge=2, le=14),
 ) -> dict[str, Any]:
-    """
-    Compare current hotspots vs. a previous period to detect
-    new, persistent, and resolved hotspots.
-    """
+    """Compare current vs previous period to detect changes."""
+    delay_info = get_data_delay(request)
+
     try:
         from ingestion.firms import fetch_hotspots
         from analysis.change_detection import detect_changes
@@ -324,10 +383,17 @@ def get_hotspot_changes(
         current_data = enrich_with_regions(current_raw)
         previous_data = enrich_with_regions(previous_raw)
 
-        changes = detect_changes(
-            previous=previous_data, current=current_data
-        )
-        return changes
+        changes = detect_changes(previous=previous_data, current=current_data)
+
+        # ── Delay change features for anonymous users ──
+        if delay_info["delayed"]:
+            for key in ("new", "persistent", "resolved"):
+                if key in changes and isinstance(changes[key], list):
+                    changes[key] = filter_features_by_delay(
+                        changes[key], delay_info["cutoff_time"],
+                    )
+
+        return add_security_metadata(changes, delay_info)
 
     except Exception as e:
         tb = traceback.format_exc()
@@ -337,87 +403,130 @@ def get_hotspot_changes(
 
 @router.get("/hotspots/movement")
 def get_movement_analysis(
-    days: int = Query(
-        default=1, ge=1, le=5,
-        description="Current snapshot days",
-    ),
-    compare_days: int = Query(
-        default=3, ge=2, le=10,
-        description="Previous period days to compare against",
-    ),
+    request: Request,
+    days: int = Query(default=1, ge=1, le=10),
+    compare_days: int = Query(default=3, ge=2, le=14),
 ) -> dict[str, Any]:
     """
     Detect hotspot cluster movement between two time periods.
-    Identifies potential camp relocations and movement corridors.
-    
-    This is the core intelligence endpoint for tracking
-    terrorist/bandit movement patterns.
+    ⚠ Anonymous users: movement intel is BLOCKED entirely.
+    Never returns 500 — always returns structured response.
     """
+    delay_info = get_data_delay(request)
+    now = datetime.utcnow()
+
+    # ── Structured empty response ──
+    empty: dict[str, Any] = {
+        "analysis_time": now.isoformat(),
+        "current_period_days": days,
+        "comparison_period_days": compare_days,
+        "current_clusters": 0,
+        "previous_clusters": 0,
+        "movements_detected": 0,
+        "alerts_generated": 0,
+        "summary": {
+            "camp_relocations": 0,
+            "corridor_movements": 0,
+            "rapid_relocations": 0,
+            "critical_alerts": 0,
+            "high_alerts": 0,
+        },
+        "movements": [],
+        "alerts": [],
+        "clusters": {"current": [], "previous": []},
+    }
+
+    # ── BLOCK movement intel for anonymous users ──
+    if delay_info["delayed"]:
+        return add_security_metadata(empty, delay_info)
+
+    # ── Step 1: Import core dependencies ──
     try:
         from ingestion.firms import fetch_hotspots
         from analysis.anomaly_score import score_hotspots
         from analysis.region_classifier import enrich_with_regions
+    except ImportError as e:
+        print(f"[MOVEMENT] Core import failed: {e}")
+        empty["error"] = f"Missing dependency: {e}"
+        return add_security_metadata(empty, delay_info)
 
-        # Get current and previous data
+    # ── Step 2: Fetch current data ──
+    try:
         current_raw = fetch_hotspots(days=days, country="NGA")
+    except Exception as e:
+        print(f"[MOVEMENT] Current fetch failed: {e}")
+        empty["error"] = f"Current data unavailable: {e}"
+        return add_security_metadata(empty, delay_info)
+
+    # ── Step 3: Fetch previous data ──
+    try:
         previous_raw = fetch_hotspots(days=compare_days, country="NGA")
+    except Exception as e:
+        print(f"[MOVEMENT] Previous fetch failed: {e}")
+        empty["error"] = f"Previous data unavailable: {e}"
+        return add_security_metadata(empty, delay_info)
 
-        current_data = enrich_with_regions(score_hotspots(
-            enrich_with_regions(current_raw)
-        ))
-        previous_data = enrich_with_regions(score_hotspots(
-            enrich_with_regions(previous_raw)
-        ))
+    # ── Step 4: Enrich + Score ──
+    try:
+        current_enriched = enrich_with_regions(current_raw)
+        current_scored = score_hotspots(current_enriched)
+        previous_enriched = enrich_with_regions(previous_raw)
+        previous_scored = score_hotspots(previous_enriched)
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[MOVEMENT] Enrichment failed:\n{tb}")
+        empty["error"] = f"Analysis pipeline error: {e}"
+        return add_security_metadata(empty, delay_info)
 
-        # Extract clusters
-        current_clusters = _extract_clusters(current_data)
-        previous_clusters = _extract_clusters(previous_data)
+    # ── Step 5: Extract clusters ──
+    try:
+        current_clusters = _extract_clusters(current_scored)
+        previous_clusters = _extract_clusters(previous_scored)
+    except Exception as e:
+        print(f"[MOVEMENT] Cluster extraction failed: {e}")
+        empty["error"] = f"Cluster extraction failed: {e}"
+        return add_security_metadata(empty, delay_info)
 
-        # Detect movement
+    empty["current_clusters"] = len(current_clusters)
+    empty["previous_clusters"] = len(previous_clusters)
+    empty["clusters"] = {
+        "current": current_clusters,
+        "previous": previous_clusters,
+    }
+
+    # ── Step 6: Run movement tracker ──
+    try:
         from api.services.movement_tracker import MovementTracker
+    except ImportError as e:
+        print(f"[MOVEMENT] MovementTracker not available: {e}")
+        empty["error"] = f"Movement tracker module missing: {e}"
+        return add_security_metadata(empty, delay_info)
+
+    try:
         tracker = MovementTracker()
 
-        # Get state resolver function
+        state_fn = None
         try:
             from analysis.region_classifier import get_state_from_coords
             state_fn = get_state_from_coords
         except ImportError:
-            state_fn = None
+            pass
 
-        now = datetime.utcnow()
         movements = tracker.analyze_movement(
             clusters_before=previous_clusters,
             clusters_after=current_clusters,
-            time_before=(
-                now.replace(hour=0, minute=0)
-                .__str__()
-            ),
+            time_before=now.replace(
+                hour=0, minute=0, second=0, microsecond=0,
+            ).isoformat(),
             time_after=now.isoformat(),
             get_state_fn=state_fn,
         )
 
-        # Generate alerts for significant movements
         alerts = tracker.generate_alerts(movements, current_clusters)
-
-        # Build response
         movement_data = [m.to_dict() for m in movements]
         alert_data = [a.to_dict() for a in alerts]
 
-        # Classify movements by type
-        relocations = [
-            m for m in movement_data
-            if m["classification"] == "camp_relocation"
-        ]
-        corridors = [
-            m for m in movement_data
-            if m["classification"] == "corridor"
-        ]
-        rapid = [
-            m for m in movement_data
-            if m["classification"] == "rapid_relocation"
-        ]
-
-        return {
+        result = {
             "analysis_time": now.isoformat(),
             "current_period_days": days,
             "comparison_period_days": compare_days,
@@ -426,9 +535,18 @@ def get_movement_analysis(
             "movements_detected": len(movements),
             "alerts_generated": len(alerts),
             "summary": {
-                "camp_relocations": len(relocations),
-                "corridor_movements": len(corridors),
-                "rapid_relocations": len(rapid),
+                "camp_relocations": sum(
+                    1 for m in movement_data
+                    if m["classification"] == "camp_relocation"
+                ),
+                "corridor_movements": sum(
+                    1 for m in movement_data
+                    if m["classification"] == "corridor"
+                ),
+                "rapid_relocations": sum(
+                    1 for m in movement_data
+                    if m["classification"] == "rapid_relocation"
+                ),
                 "critical_alerts": sum(
                     1 for a in alert_data
                     if a.get("priority") == "critical"
@@ -446,30 +564,24 @@ def get_movement_analysis(
             },
         }
 
-    except ImportError as e:
-        return {
-            "error": f"Movement tracker not available: {e}",
-            "hint": "Create api/services/movement_tracker.py",
-            "movements": [],
-            "alerts": [],
-        }
+        return add_security_metadata(result, delay_info)
+
     except Exception as e:
         tb = traceback.format_exc()
-        print(f"[ERROR] /hotspots/movement failed:\n{tb}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[MOVEMENT] Analysis failed:\n{tb}")
+        empty["error"] = f"Movement analysis error: {e}"
+        return add_security_metadata(empty, delay_info)
 
 
 @router.get("/hotspots/states")
 def get_hotspots_by_state(
+    request: Request,
     days: int = Query(default=1, ge=1, le=10),
-    state: str | None = Query(
-        default=None,
-        description="Filter by Nigerian state name",
-    ),
+    state: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    """
-    Returns hotspots filtered by Nigerian state.
-    """
+    """Hotspots filtered by Nigerian state."""
+    delay_info = get_data_delay(request)
+
     try:
         from ingestion.firms import fetch_hotspots
         from analysis.anomaly_score import score_hotspots
@@ -480,14 +592,20 @@ def get_hotspots_by_state(
         data = score_hotspots(data)
 
         features = data.get("features", [])
+        original_count = len(features)
+
+        # ── Apply delay ──
+        if delay_info["delayed"]:
+            features = filter_features_by_delay(
+                features, delay_info["cutoff_time"],
+            )
 
         if state:
             filtered = [
                 f for f in features
-                if f["properties"].get("state", "").lower()
-                == state.lower()
+                if f["properties"].get("state", "").lower() == state.lower()
             ]
-            return {
+            result = {
                 "type": "FeatureCollection",
                 "features": filtered,
                 "metadata": {
@@ -495,6 +613,11 @@ def get_hotspots_by_state(
                     "state_filter": state,
                 },
             }
+            return add_security_metadata(
+                result, delay_info,
+                original_count=original_count,
+                filtered_count=len(filtered),
+            )
 
         state_data: dict[str, dict[str, Any]] = {}
         for f in features:
@@ -506,7 +629,7 @@ def get_hotspots_by_state(
                     "critical_threats": 0,
                     "max_score": 0,
                     "threat_tier": f["properties"].get(
-                        "threat_tier", "Unknown"
+                        "threat_tier", "Unknown",
                     ),
                 }
             state_data[s]["count"] += 1
@@ -523,10 +646,15 @@ def get_hotspots_by_state(
             key=lambda x: x[1]["count"],
             reverse=True,
         ))
-        return {
+        result = {
             "states": sorted_states,
             "total_states_affected": len(sorted_states),
         }
+        return add_security_metadata(
+            result, delay_info,
+            original_count=original_count,
+            filtered_count=len(features),
+        )
 
     except Exception as e:
         tb = traceback.format_exc()
@@ -536,13 +664,38 @@ def get_hotspots_by_state(
 
 @router.get("/hotspots/intel/brief")
 def get_intelligence_brief(
-    days: int = Query(default=1, ge=1, le=5),
+    request: Request,
+    days: int = Query(default=1, ge=1, le=10),
 ) -> dict[str, Any]:
     """
-    Generate a military-style intelligence brief.
-    Combines hotspot data, movement analysis, and threat assessment
-    into an actionable summary for security forces.
+    Military-style intelligence brief.
+    ⚠ Anonymous users receive a REDACTED public summary.
     """
+    delay_info = get_data_delay(request)
+
+    # ── Anonymous: return redacted brief ──
+    if delay_info["delayed"]:
+        redacted = {
+            "classification": "UNCLASSIFIED",
+            "title": "EagleEye-Nigeria — Public Summary",
+            "generated": datetime.utcnow().isoformat(),
+            "period": f"Last {days} day(s)",
+            "situation_overview": {
+                "notice": (
+                    "Detailed intelligence briefs are restricted to "
+                    "authorized personnel. Sign in with military or "
+                    "analyst credentials for full access."
+                ),
+            },
+            "priority_areas": [],
+            "active_alerts": [],
+            "recommended_actions": [
+                "Contact your unit commander for current threat assessment",
+            ],
+        }
+        return add_security_metadata(redacted, delay_info)
+
+    # ── Authorized: full classified brief ──
     try:
         from ingestion.firms import fetch_hotspots
         from analysis.anomaly_score import score_hotspots
@@ -555,13 +708,11 @@ def get_intelligence_brief(
         features = data.get("features", [])
         now = datetime.utcnow()
 
-        # Threat summary
         critical_features = [
             f for f in features
             if f["properties"].get("priority") in ("CRITICAL", "HIGH")
         ]
 
-        # Group critical threats by zone
         zone_threats: dict[str, list[dict[str, Any]]] = {}
         for f in critical_features:
             zone = f["properties"].get("red_zone", "Other")
@@ -575,7 +726,6 @@ def get_intelligence_brief(
                 "priority": f["properties"].get("priority", "MONITOR"),
             })
 
-        # Load recent alerts
         alerts_file = (
             Path(__file__).parent.parent.parent
             / "data" / "alerts" / "active_alerts.json"
@@ -592,7 +742,6 @@ def get_intelligence_brief(
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # Build the brief
         brief: dict[str, Any] = {
             "classification": "CONFIDENTIAL",
             "title": "EagleEye-Nigeria Threat Intelligence Brief",
@@ -609,7 +758,6 @@ def get_intelligence_brief(
             "recommended_actions": [],
         }
 
-        # Priority areas
         for zone_name, threats in sorted(
             zone_threats.items(),
             key=lambda x: len(x[1]),
@@ -626,60 +774,33 @@ def get_intelligence_brief(
                     "lon": max_threat["lon"],
                 },
                 "assessment": _assess_zone_threat(
-                    len(threats), max_threat["score"]
+                    len(threats), max_threat["score"],
                 ),
             })
 
-        # Recommended actions
         if critical_features:
             brief["recommended_actions"].append(
-                "Deploy aerial surveillance to critical threat zones"
+                "Deploy aerial surveillance to critical threat zones",
             )
         if len(zone_threats) > 3:
             brief["recommended_actions"].append(
-                "Increase patrol frequency across multiple active zones"
+                "Increase patrol frequency across multiple active zones",
             )
         if recent_alerts:
             brief["recommended_actions"].append(
-                "Review and action pending movement alerts"
+                "Review and action pending movement alerts",
             )
         if not brief["recommended_actions"]:
             brief["recommended_actions"].append(
-                "Maintain routine monitoring — no elevated threats"
+                "Maintain routine monitoring — no elevated threats",
             )
 
-        return brief
+        return add_security_metadata(brief, delay_info)
 
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[ERROR] /hotspots/intel/brief failed:\n{tb}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-def _assess_zone_threat(count: int, max_score: float) -> str:
-    """Generate a human-readable threat assessment."""
-    if max_score >= 80 or count >= 10:
-        return (
-            "CRITICAL — Multiple high-confidence thermal signatures "
-            "suggest active militant/bandit operations. "
-            "Immediate reconnaissance recommended."
-        )
-    if max_score >= 60 or count >= 5:
-        return (
-            "HIGH — Significant thermal activity detected. "
-            "Pattern consistent with camp activity. "
-            "Enhanced monitoring recommended."
-        )
-    if max_score >= 40 or count >= 3:
-        return (
-            "ELEVATED — Moderate thermal activity. "
-            "Could indicate agricultural burning or small settlements. "
-            "Continue routine surveillance."
-        )
-    return (
-        "MONITOR — Low-level activity. "
-        "Likely routine agricultural or natural fires."
-    )
 
 
 @router.post("/hotspots/cache/clear")

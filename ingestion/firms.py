@@ -2,18 +2,23 @@
 firms.py
 ─────────
 Fetches thermal hotspot data from NASA FIRMS API with caching.
-Handles the NRT API's 1–5 day limit by chunking longer requests
-into multiple 5-day windows and deduplicating results.
+
+FIRMS API Day Limits (as of 2024+):
+  - Area/bbox endpoint:    max 5 days per request
+  - Country endpoint:      max 10 days per request
+
+This module respects both limits and chunks longer requests accordingly.
+Includes fast geo enrichment (no external geocoding dependencies).
 """
 
 import os
-import requests
 import csv
 import io
+import hashlib
 import traceback
-from datetime import datetime, timedelta
+import requests
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Tuple, Set
-from utils.geocoding import enrich_features_with_location, quick_label
 
 try:
     from dotenv import load_dotenv
@@ -24,11 +29,20 @@ except ImportError:
 from ingestion.cache import firms_cache
 
 FIRMS_API_KEY = os.getenv("NASA_FIRMS_API_KEY", "")
-FIRMS_BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 
-# NASA FIRMS NRT API hard limit
-FIRMS_MAX_DAYS_NRT = 5
+# ── FIRMS endpoints ──────────────────────────────────────────
+FIRMS_COUNTRY_URL = "https://firms.modaps.eosdis.nasa.gov/api/country/csv"
+FIRMS_AREA_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 
+# ── FIRMS API hard day limits ────────────────────────────────
+# These are enforced server-side and CANNOT be exceeded
+FIRMS_MAX_DAYS_AREA = 5       # /api/area/ endpoint limit
+FIRMS_MAX_DAYS_COUNTRY = 10   # /api/country/ endpoint limit
+
+# For chunking, use the smaller limit to guarantee all URLs work
+FIRMS_CHUNK_SIZE = 5
+
+# ── Geo Enrichment Config ─────────────────────────────────────
 NIGERIA_BOUNDS = {
     "min_lat": 4.0,
     "max_lat": 14.0,
@@ -54,14 +68,71 @@ RED_ZONES = [
     },
 ]
 
+# ── Source priority list ─────────────────────────────────────
+# Ordered by reliability/freshness — stop after first success
 FIRMS_SOURCES = [
     "VIIRS_SNPP_NRT",
     "VIIRS_NOAA20_NRT",
+    "VIIRS_NOAA21_NRT",
     "MODIS_NRT",
+    "VIIRS_SNPP_SP",
+    "VIIRS_NOAA20_SP",
+    "MODIS_SP",
+]
+
+# ── Fast Local Region Lookup (no API calls) ──────────────────
+NIGERIA_STATES = {
+    "FCT Abuja":       (9.05, 7.49),
+    "Lagos":           (6.52, 3.37),
+    "Kano":            (12.00, 8.52),
+    "Rivers":          (4.84, 6.91),
+    "Oyo":             (7.85, 3.93),
+    "Kaduna":          (10.52, 7.44),
+    "Borno":           (11.85, 13.15),
+    "Benue":           (7.34, 8.77),
+    "Niger":           (9.93, 5.60),
+    "Plateau":         (9.22, 9.52),
+    "Adamawa":         (9.33, 12.40),
+    "Bauchi":          (10.31, 9.84),
+    "Taraba":          (8.00, 10.73),
+    "Zamfara":         (12.17, 6.25),
+    "Katsina":         (13.00, 7.60),
+    "Sokoto":          (13.06, 5.24),
+    "Kebbi":           (12.45, 4.20),
+    "Jigawa":          (12.23, 9.56),
+    "Yobe":            (12.29, 11.75),
+    "Gombe":           (10.29, 11.17),
+    "Nasarawa":        (8.54, 8.52),
+    "Kwara":           (8.49, 4.54),
+    "Kogi":            (7.73, 6.69),
+    "Ogun":            (6.97, 3.39),
+    "Osun":            (7.56, 4.52),
+    "Ekiti":           (7.72, 5.31),
+    "Ondo":            (7.10, 5.05),
+    "Edo":             (6.63, 5.93),
+    "Delta":           (5.70, 5.68),
+    "Bayelsa":         (4.77, 6.07),
+    "Anambra":         (6.21, 6.94),
+    "Enugu":           (6.44, 7.50),
+    "Ebonyi":          (6.26, 8.09),
+    "Imo":             (5.57, 7.03),
+    "Abia":            (5.45, 7.52),
+    "Cross River":     (5.87, 8.60),
+    "Akwa Ibom":       (5.01, 7.85),
+}
+
+LATITUDE_ZONES = [
+    (12.0, 14.0, "Far North"),
+    (10.0, 12.0, "North"),
+    (8.0, 10.0, "North Central"),
+    (6.5, 8.0, "South West / South East"),
+    (4.0, 6.5, "South South"),
 ]
 
 
-# ── Geo helpers ───────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+#  Fast Geo Helpers (all local, no external API)
+# ══════════════════════════════════════════════════════════════
 
 def _get_red_zone(lat: float, lon: float) -> str:
     """Return the name of the red zone a point falls into, or 'Other'."""
@@ -74,6 +145,31 @@ def _get_red_zone(lat: float, lon: float) -> str:
     return "Other"
 
 
+def _get_nearest_state(lat: float, lon: float) -> str:
+    """Find the nearest Nigerian state by coordinate distance (instant)."""
+    best_state = "Unknown"
+    best_dist = float("inf")
+
+    for state_name, (s_lat, s_lon) in NIGERIA_STATES.items():
+        dist = (lat - s_lat) ** 2 + (lon - s_lon) ** 2
+        if dist < best_dist:
+            best_dist = dist
+            best_state = state_name
+
+    # Only return if within ~1.5 degrees (~170km)
+    if best_dist > 2.25:
+        return "Unknown"
+    return best_state
+
+
+def _get_geo_zone(lat: float) -> str:
+    """Get broad geo zone from latitude (instant)."""
+    for min_lat, max_lat, zone_name in LATITUDE_ZONES:
+        if min_lat <= lat <= max_lat:
+            return zone_name
+    return "Nigeria"
+
+
 def _is_in_nigeria(lat: float, lon: float) -> bool:
     return (
         NIGERIA_BOUNDS["min_lat"] <= lat <= NIGERIA_BOUNDS["max_lat"]
@@ -82,13 +178,11 @@ def _is_in_nigeria(lat: float, lon: float) -> bool:
 
 
 def _validate_api_key(key: str) -> bool:
-    if not key or len(key) < 10:
-        return False
-    return True
+    return bool(key and len(key) >= 10)
 
 
 def _nigeria_bbox_str() -> str:
-    """Return the Nigeria bounding box as a comma-separated string."""
+    """Return W,S,E,N bbox string for Nigeria."""
     return (
         f"{NIGERIA_BOUNDS['min_lon']},"
         f"{NIGERIA_BOUNDS['min_lat']},"
@@ -97,7 +191,58 @@ def _nigeria_bbox_str() -> str:
     )
 
 
-# ── HTTP request helper ──────────────────────────────────────
+def _get_safe_end_date() -> str:
+    """
+    Return a safe end date for the FIRMS API.
+    Uses yesterday UTC to guarantee data availability
+    (today's data may not be processed yet).
+    """
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    return yesterday.strftime("%Y-%m-%d")
+
+
+# ══════════════════════════════════════════════════════════════
+#  Fast Enrichment (all local, no external API)
+# ══════════════════════════════════════════════════════════════
+
+def _enrich_result(result: Dict) -> Dict:
+    """
+    Enrich all features with location data using local lookups only.
+    No external API calls — runs instantly.
+    """
+    features = result.get("features", [])
+    if not features:
+        return result
+
+    total = len(features)
+    start_time = datetime.now(timezone.utc)
+
+    for f in features:
+        props = f.get("properties", {})
+        coords = f.get("geometry", {}).get("coordinates", [0, 0])
+        lon = coords[0] if len(coords) > 0 else 0
+        lat = coords[1] if len(coords) > 1 else 0
+
+        if lat and lon:
+            props["state"] = _get_nearest_state(lat, lon)
+            props["geo_zone"] = _get_geo_zone(lat)
+            props["latitude"] = lat
+            props["longitude"] = lon
+            props["geo_source"] = "local_lookup"
+
+            if not props.get("red_zone"):
+                props["red_zone"] = _get_red_zone(lat, lon)
+
+    elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+    print(f"[GEO] ✓ Local enrichment: {total} features in {elapsed:.3f}s")
+
+    result["features"] = features
+    return result
+
+
+# ══════════════════════════════════════════════════════════════
+#  HTTP Request Helper
+# ══════════════════════════════════════════════════════════════
 
 def _try_firms_request(url: str) -> Optional[requests.Response]:
     """
@@ -106,29 +251,47 @@ def _try_firms_request(url: str) -> Optional[requests.Response]:
     """
     try:
         print(f"[FIRMS] Trying: {url}")
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, timeout=45)
         print(f"[FIRMS] Status: {response.status_code}")
 
         if response.status_code == 200:
             content_type = response.headers.get("Content-Type", "")
-            if "html" in content_type.lower() or response.text.strip().startswith("<!"):
-                print("[FIRMS] Got HTML instead of CSV — skipping.")
-                return None
-            if response.text.strip():
-                first_line = response.text.strip().split("\n")[0]
-                if "latitude" in first_line.lower() or "," in first_line:
-                    return response
-                else:
-                    print(f"[FIRMS] Response doesn't look like CSV: {first_line[:100]}")
-                    return None
-            else:
+            body = response.text.strip()
+
+            if not body:
                 print("[FIRMS] Empty response body.")
                 return None
+
+            if "html" in content_type.lower() or body.startswith("<!"):
+                print("[FIRMS] Got HTML instead of CSV — skipping.")
+                return None
+
+            lines = body.split("\n")
+            first_line = lines[0] if lines else ""
+
+            if "latitude" not in first_line.lower():
+                print(
+                    f"[FIRMS] Response doesn't look like FIRMS CSV: "
+                    f"{first_line[:120]}"
+                )
+                return None
+
+            data_rows = len(lines) - 1
+            print(f"[FIRMS] CSV has {data_rows} data row(s)")
+
+            if data_rows < 1:
+                print("[FIRMS] CSV has headers but no data rows.")
+                return response  # Valid empty — caller sees 0 features
+
+            return response
         else:
-            print(f"[FIRMS] Non-200: {response.text[:200]}")
+            print(f"[FIRMS] Non-200 status: {response.status_code}")
+            preview = response.text[:300] if response.text else "(empty)"
+            print(f"[FIRMS] Response preview: {preview}")
             return None
+
     except requests.exceptions.Timeout:
-        print("[FIRMS] Timeout.")
+        print("[FIRMS] Timeout (45s).")
         return None
     except requests.exceptions.ConnectionError:
         print("[FIRMS] Connection error.")
@@ -138,7 +301,83 @@ def _try_firms_request(url: str) -> Optional[requests.Response]:
         return None
 
 
-# ── Single-window fetch (1–5 days) ───────────────────────────
+# ══════════════════════════════════════════════════════════════
+#  URL Builders (FIXED — respects per-endpoint day limits)
+# ══════════════════════════════════════════════════════════════
+
+def _build_country_urls(
+    source: str, days: int, end_date: Optional[str], country: str
+) -> List[str]:
+    """
+    Build country endpoint URLs.
+    Country endpoint supports up to 10 days.
+    """
+    clamped = min(days, FIRMS_MAX_DAYS_COUNTRY)
+    urls = []
+
+    if end_date:
+        urls.append(
+            f"{FIRMS_COUNTRY_URL}/{FIRMS_API_KEY}/{source}"
+            f"/{country}/{clamped}/{end_date}"
+        )
+    # Without date (API uses latest available)
+    urls.append(
+        f"{FIRMS_COUNTRY_URL}/{FIRMS_API_KEY}/{source}"
+        f"/{country}/{clamped}"
+    )
+
+    return urls
+
+
+def _build_area_urls(
+    source: str, days: int, end_date: Optional[str]
+) -> List[str]:
+    """
+    Build area/bbox endpoint URLs.
+    Area endpoint supports up to 5 days ONLY.
+    """
+    clamped = min(days, FIRMS_MAX_DAYS_AREA)
+    bbox = _nigeria_bbox_str()
+    urls = []
+
+    if end_date:
+        urls.append(
+            f"{FIRMS_AREA_URL}/{FIRMS_API_KEY}/{source}"
+            f"/{bbox}/{clamped}/{end_date}"
+        )
+    # Without date
+    urls.append(
+        f"{FIRMS_AREA_URL}/{FIRMS_API_KEY}/{source}"
+        f"/{bbox}/{clamped}"
+    )
+
+    return urls
+
+
+def _build_all_urls(
+    source: str, days: int, end_date: Optional[str], country: str
+) -> List[Tuple[str, bool]]:
+    """
+    Build a prioritized list of (url, needs_nigeria_filter) tuples.
+    Country endpoint first (higher day limit, pre-filtered),
+    then area endpoint as fallback.
+    """
+    urls: List[Tuple[str, bool]] = []
+
+    # Country endpoint — no Nigeria filter needed (already filtered)
+    for url in _build_country_urls(source, days, end_date, country):
+        urls.append((url, False))
+
+    # Area endpoint — may need Nigeria filter if bbox is wider
+    for url in _build_area_urls(source, days, end_date):
+        urls.append((url, False))  # Our bbox IS Nigeria, no extra filter
+
+    return urls
+
+
+# ══════════════════════════════════════════════════════════════
+#  Single-Window Fetch (respects day limits)
+# ══════════════════════════════════════════════════════════════
 
 def _fetch_single_window(
     days: int,
@@ -146,63 +385,71 @@ def _fetch_single_window(
     country: str = "NGA",
 ) -> Optional[Dict]:
     """
-    Fetch hotspots for a single window of 1–5 days ending on end_date.
+    Fetch hotspots for a single window.
+    Automatically clamps days to API limits per endpoint type.
     Tries multiple sources and URL patterns.
-    Returns a parsed GeoJSON dict or None on failure.
     """
-    clamped_days = min(max(days, 1), FIRMS_MAX_DAYS_NRT)
     if end_date is None:
-        end_date = datetime.utcnow().strftime("%Y-%m-%d")
+        end_date = _get_safe_end_date()
 
-    nigeria_bbox = _nigeria_bbox_str()
+    # Clamp to the maximum either endpoint can handle
+    effective_days = min(max(days, 1), FIRMS_MAX_DAYS_COUNTRY)
+
+    print(f"[FIRMS] Fetching {effective_days} day(s), end_date={end_date}")
 
     for source in FIRMS_SOURCES:
-        # Try 1: bbox + date
-        url = (
-            f"{FIRMS_BASE_URL}/{FIRMS_API_KEY}/{source}/"
-            f"{nigeria_bbox}/{clamped_days}/{end_date}"
-        )
-        response = _try_firms_request(url)
-        if response is not None:
-            print(f"[FIRMS] ✓ Success with bbox URL: {source}")
+        url_pairs = _build_all_urls(source, effective_days, end_date, country)
+
+        for url, needs_filter in url_pairs:
+            response = _try_firms_request(url)
+            if response is None:
+                continue
+
             result = _parse_csv_to_geojson(
-                response.text, filter_nigeria=False, source_name=source,
+                response.text,
+                filter_nigeria=needs_filter,
+                source_name=source,
             )
+
             if result["features"]:
+                print(
+                    f"[FIRMS] ✓ Got {len(result['features'])} features "
+                    f"from {source}"
+                )
                 return result
 
-        # Try 2: world + date
+    # ── Last resort: each source, country endpoint, no date ──
+    print(
+        "[FIRMS] All dated requests returned 0 features. "
+        "Trying without date..."
+    )
+    for source in FIRMS_SOURCES:
+        # Country endpoint, clamped days, no date
+        clamped = min(effective_days, FIRMS_MAX_DAYS_COUNTRY)
         url = (
-            f"{FIRMS_BASE_URL}/{FIRMS_API_KEY}/{source}/"
-            f"world/{clamped_days}/{end_date}"
+            f"{FIRMS_COUNTRY_URL}/{FIRMS_API_KEY}/{source}"
+            f"/{country}/{clamped}"
         )
         response = _try_firms_request(url)
         if response is not None:
-            print(f"[FIRMS] ✓ Success with world URL: {source}")
             result = _parse_csv_to_geojson(
-                response.text, filter_nigeria=True, source_name=source,
+                response.text,
+                filter_nigeria=False,
+                source_name=source,
             )
             if result["features"]:
-                return result
-
-        # Try 3: bbox without date
-        url = (
-            f"{FIRMS_BASE_URL}/{FIRMS_API_KEY}/{source}/"
-            f"{nigeria_bbox}/{clamped_days}"
-        )
-        response = _try_firms_request(url)
-        if response is not None:
-            print(f"[FIRMS] ✓ Success with no-date URL: {source}")
-            result = _parse_csv_to_geojson(
-                response.text, filter_nigeria=False, source_name=source,
-            )
-            if result["features"]:
+                print(
+                    f"[FIRMS] ✓ Got {len(result['features'])} features "
+                    f"from {source} (no-date fallback)"
+                )
                 return result
 
     return None
 
 
-# ── Multi-window fetch (>5 days) ─────────────────────────────
+# ══════════════════════════════════════════════════════════════
+#  Multi-Window Chunked Fetch (FIXED chunk size)
+# ══════════════════════════════════════════════════════════════
 
 def _fetch_chunked(
     days: int,
@@ -210,25 +457,33 @@ def _fetch_chunked(
 ) -> Optional[Dict]:
     """
     Fetch hotspots for more than 5 days by splitting into
-    multiple 5-day windows and deduplicating the results.
+    FIRMS_CHUNK_SIZE-day windows (default 5) and deduplicating.
+
+    Uses 5-day chunks because that's the limit shared by both
+    area and country endpoints (country allows 10, but 5 is safer
+    and gives us access to both endpoint types as fallback).
     """
+    chunk_size = FIRMS_CHUNK_SIZE
+    num_chunks = (days + chunk_size - 1) // chunk_size
+
     print(
-        f"[FIRMS] Requested {days} days (NRT limit is {FIRMS_MAX_DAYS_NRT}) "
-        f"— chunking into windows"
+        f"[FIRMS] Requested {days} days → "
+        f"{num_chunks} chunk(s) of ≤{chunk_size} days each"
     )
 
     all_features: List[Dict] = []
-    end_dt = datetime.utcnow()
+    end_dt = datetime.now(timezone.utc) - timedelta(days=1)  # yesterday
     remaining = days
     chunk_num = 0
 
     while remaining > 0:
-        chunk_days = min(remaining, FIRMS_MAX_DAYS_NRT)
+        chunk_days = min(remaining, chunk_size)
         chunk_end = end_dt.strftime("%Y-%m-%d")
         chunk_num += 1
 
         print(
-            f"[FIRMS]   Chunk {chunk_num}: {chunk_days} days ending {chunk_end} "
+            f"[FIRMS]   Chunk {chunk_num}/{num_chunks}: "
+            f"{chunk_days} days ending {chunk_end} "
             f"(remaining={remaining})"
         )
 
@@ -241,12 +496,12 @@ def _fetch_chunked(
         if result is not None and result.get("features"):
             all_features.extend(result["features"])
             print(
-                f"[FIRMS]   Chunk {chunk_num}: got {len(result['features'])} features"
+                f"[FIRMS]   Chunk {chunk_num}: "
+                f"got {len(result['features'])} features"
             )
         else:
             print(f"[FIRMS]   Chunk {chunk_num}: no features returned")
 
-        # Move the window backward
         end_dt -= timedelta(days=chunk_days)
         remaining -= chunk_days
 
@@ -258,12 +513,11 @@ def _fetch_chunked(
         props = f.get("properties", {})
         coords = f.get("geometry", {}).get("coordinates", [0, 0])
         dedup_key = (
-            round(coords[1], 4),   # lat
-            round(coords[0], 4),   # lon
+            round(coords[1], 4),
+            round(coords[0], 4),
             props.get("acq_date", ""),
             props.get("acq_time", ""),
         )
-
         if dedup_key not in seen:
             seen.add(dedup_key)
             unique_features.append(f)
@@ -271,8 +525,9 @@ def _fetch_chunked(
     duplicates_removed = len(all_features) - len(unique_features)
 
     print(
-        f"[FIRMS] Chunked fetch complete: {len(unique_features)} unique features "
-        f"from {chunk_num} chunks ({duplicates_removed} duplicates removed)"
+        f"[FIRMS] Chunked fetch complete: {len(unique_features)} unique "
+        f"features from {chunk_num} chunks "
+        f"({duplicates_removed} duplicates removed)"
     )
 
     if not unique_features:
@@ -284,7 +539,7 @@ def _fetch_chunked(
         "metadata": {
             "count": len(unique_features),
             "source": "NASA FIRMS",
-            "sensor": "VIIRS SNPP NRT",
+            "sensor": "Multi-source",
             "days_requested": days,
             "chunks_used": chunk_num,
             "duplicates_removed": duplicates_removed,
@@ -293,82 +548,117 @@ def _fetch_chunked(
     }
 
 
-# ── Public entry point ────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+#  Public Entry Point
+# ══════════════════════════════════════════════════════════════
 
-def fetch_hotspots(days: int = 1, country: str = "NGA") -> Dict:
+def fetch_hotspots(days: int = 2, country: str = "NGA") -> Dict:
     """
     Fetch thermal hotspot data from NASA FIRMS API.
     Results are enriched with location names and cached.
+
+    Day handling:
+      - 1–5 days:   single request (works with both endpoints)
+      - 6–10 days:  single request via country endpoint, or 2 chunks
+      - 11–90 days: chunked into 5-day windows automatically
+
+    Performance:
+      - All geo enrichment is local (0 external API calls)
+      - Enrichment runs in <0.01s for hundreds of features
     """
     days = max(1, min(days, 90))
 
     cache_key = f"firms_{country}_{days}"
     cached = firms_cache.get(cache_key)
     if cached is not None:
-        count = cached.get("metadata", {}).get("count", len(cached.get("features", [])))
+        count = cached.get("metadata", {}).get(
+            "count", len(cached.get("features", []))
+        )
         print(f"[FIRMS] ✓ Cache hit for {cache_key} ({count} features)")
         return cached
+    
+     # ── Deduplication: prevent concurrent identical API calls ──
+    status = firms_cache.wait_or_claim(cache_key, timeout=50.0)
+
+    if status == "waited":
+        # Another thread just fetched this — grab from cache
+        cached = firms_cache.get(cache_key)
+        if cached is not None:
+            print(f"[FIRMS] ✓ Dedup hit for {cache_key}")
+            return cached
+        # If still None, fall through and fetch ourselves
 
     print(f"[FIRMS] Cache miss for {cache_key} — fetching from API...")
+    print(f"[FIRMS] System UTC time: {datetime.now(timezone.utc).isoformat()}")
+    print(f"[FIRMS] Safe end date:   {_get_safe_end_date()}")
 
     if not _validate_api_key(FIRMS_API_KEY):
-        print("[FIRMS] No valid NASA_FIRMS_API_KEY found — returning mock data.")
+        print(
+            "[FIRMS] ⚠ No valid NASA_FIRMS_API_KEY found "
+            "— returning mock data."
+        )
         result = _mock_hotspots(days=days)
-        result = _enrich_result(result)                    # ← ADD THIS
+        result = _enrich_result(result)
         firms_cache.set(cache_key, result, ttl=60)
         return result
 
     result = None
 
-    if days <= FIRMS_MAX_DAYS_NRT:
-        result = _fetch_single_window(
-            days=days,
-            end_date=datetime.utcnow().strftime("%Y-%m-%d"),
-            country=country,
-        )
-    else:
-        result = _fetch_chunked(days=days, country=country)
+    # ── Strategy: try exact days first, then widen if empty ──
+    attempts = [days]
+    if days <= 2:
+        attempts = [days, 3, 5]
+    elif days <= 5:
+        attempts = [days, 5]
 
-    if result is not None and result.get("features"):
-        result.setdefault("metadata", {})
-        result["metadata"]["count"] = len(result["features"])
-        result["metadata"]["days_requested"] = days
+    for attempt_days in attempts:
+        print(f"[FIRMS] === Attempting {attempt_days}-day fetch ===")
 
-        # ── ENRICH WITH LOCATION DATA ──                   # ← ADD THIS BLOCK
-        result = _enrich_result(result)
+        if attempt_days <= FIRMS_CHUNK_SIZE:
+            # Single window — fits within both endpoint limits
+            result = _fetch_single_window(
+                days=attempt_days,
+                end_date=_get_safe_end_date(),
+                country=country,
+            )
+        else:
+            # Need chunking
+            result = _fetch_chunked(days=attempt_days, country=country)
 
-        cache_ttl = 300 if days <= 5 else 600
-        firms_cache.set(cache_key, result, ttl=cache_ttl)
+        if result is not None and result.get("features"):
+            result.setdefault("metadata", {})
+            result["metadata"]["count"] = len(result["features"])
+            result["metadata"]["days_requested"] = days
+            result["metadata"]["days_fetched"] = attempt_days
 
-        print(
-            f"[FIRMS] ✓ Final result: {len(result['features'])} features "
-            f"for {days} day(s), cached for {cache_ttl}s"
-        )
-        return result
+            # Enrich with location data (instant, local only)
+            result = _enrich_result(result)
 
-    print(f"\n[FIRMS] All attempts failed for {days} day(s). Falling back to mock data.\n")
+            cache_ttl = 300 if days <= 5 else 600
+            firms_cache.set(cache_key, result, ttl=cache_ttl)
+
+            print(
+                f"[FIRMS] ✓ Final result: {len(result['features'])} "
+                f"features for {attempt_days} day(s), "
+                f"cached for {cache_ttl}s"
+            )
+            return result
+
+        print(f"[FIRMS] {attempt_days}-day fetch returned 0 features.")
+
+    print(
+        f"\n[FIRMS] ⚠ All attempts failed for {days} day(s). "
+        f"Falling back to mock data.\n"
+    )
     result = _mock_hotspots(days=days)
-    result = _enrich_result(result)                        # ← ADD THIS
+    result = _enrich_result(result)
     firms_cache.set(cache_key, result, ttl=60)
     return result
 
 
-# ── ADD THIS NEW HELPER FUNCTION ──
-
-def _enrich_result(result: Dict) -> Dict:
-    """Enrich all features with location names."""
-    try:
-        enriched = enrich_features_with_location(
-            result,
-            use_nominatim=True,
-            max_nominatim_calls=100,
-        )
-        return enriched
-    except Exception as e:
-        print(f"[FIRMS] ⚠ Location enrichment failed: {e} — returning raw data")
-        return result
-
-# ── CSV parsing ───────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+#  CSV Parsing
+# ══════════════════════════════════════════════════════════════
 
 def _parse_csv_to_geojson(
     csv_text: str,
@@ -379,22 +669,45 @@ def _parse_csv_to_geojson(
     features: List[Dict] = []
 
     try:
+        lines = csv_text.strip().split("\n")
+        print(
+            f"[FIRMS] CSV total lines: {len(lines)} "
+            f"(1 header + {len(lines)-1} data)"
+        )
+
+        if len(lines) <= 5:
+            for i, line in enumerate(lines):
+                print(f"[FIRMS]   Line {i}: {line[:200]}")
+
         reader = csv.DictReader(io.StringIO(csv_text))
 
         if reader.fieldnames:
             print(f"[FIRMS] CSV columns: {list(reader.fieldnames)}")
 
-        for row in reader:
-            try:
-                lat = float(row.get("latitude", 0))
-                lon = float(row.get("longitude", 0))
+        row_count = 0
+        filtered_out = 0
 
-                if filter_nigeria and not _is_in_nigeria(lat, lon):
+        for row in reader:
+            row_count += 1
+            try:
+                lat_str = row.get("latitude", "")
+                lon_str = row.get("longitude", "")
+
+                if not lat_str or not lon_str:
                     continue
 
-                # Extract brightness from whichever column is available
+                lat = float(lat_str)
+                lon = float(lon_str)
+
+                if filter_nigeria and not _is_in_nigeria(lat, lon):
+                    filtered_out += 1
+                    continue
+
+                # Extract brightness from multiple possible columns
                 brightness = 0.0
-                for field_name in ("bright_ti4", "bright_ti5", "brightness", "bright"):
+                for field_name in (
+                    "bright_ti4", "bright_ti5", "brightness", "bright",
+                ):
                     val = row.get(field_name)
                     if val:
                         try:
@@ -403,14 +716,26 @@ def _parse_csv_to_geojson(
                         except ValueError:
                             continue
 
-                # Normalize confidence
-                confidence = str(row.get("confidence", "N")).strip().upper()
-                if confidence in ("HIGH",):
+                # Normalize confidence values
+                confidence = str(row.get("confidence", "N")).strip()
+                conf_upper = confidence.upper()
+                if conf_upper in ("HIGH", "H"):
                     confidence = "H"
-                elif confidence in ("NOMINAL", "NORMAL"):
+                elif conf_upper in ("NOMINAL", "NORMAL", "N"):
                     confidence = "N"
-                elif confidence in ("LOW",):
+                elif conf_upper in ("LOW", "L"):
                     confidence = "L"
+                else:
+                    try:
+                        conf_val = int(confidence)
+                        if conf_val >= 80:
+                            confidence = "H"
+                        elif conf_val >= 30:
+                            confidence = "N"
+                        else:
+                            confidence = "L"
+                    except ValueError:
+                        confidence = "N"
 
                 acq_date = row.get("acq_date", "")
                 acq_time = row.get("acq_time", "")
@@ -425,6 +750,8 @@ def _parse_csv_to_geojson(
                         "coordinates": [lon, lat],
                     },
                     "properties": {
+                        "latitude": lat,
+                        "longitude": lon,
                         "brightness": brightness,
                         "confidence": confidence,
                         "acq_date": acq_date,
@@ -442,11 +769,14 @@ def _parse_csv_to_geojson(
                 print(f"[FIRMS] Skipping malformed row: {e}")
                 continue
 
+        print(
+            f"[FIRMS] Parsed {len(features)} features "
+            f"(read {row_count} rows, filtered out {filtered_out})"
+        )
+
     except csv.Error as e:
         print(f"[FIRMS] CSV parsing error: {e}")
-        print(f"[FIRMS] Raw text preview: {csv_text[:300]}")
-
-    print(f"[FIRMS] Parsed {len(features)} features for Nigeria.")
+        print(f"[FIRMS] Raw text preview: {csv_text[:500]}")
 
     return {
         "type": "FeatureCollection",
@@ -459,14 +789,15 @@ def _parse_csv_to_geojson(
     }
 
 
-# ── Mock data fallback ───────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+#  Mock Data Fallback
+# ══════════════════════════════════════════════════════════════
 
 def _mock_hotspots(days: int = 1) -> Dict:
     """
     Generate mock hotspot data for demo/development.
     Scales the number of points based on days requested.
     """
-    # Base mock points (single day)
     base_points = [
         (12.0, 8.5, "H", "Northwest Corridor", 340.2, 45.3),
         (11.5, 13.2, "H", "Northeast Corridor", 335.8, 38.7),
@@ -479,19 +810,18 @@ def _mock_hotspots(days: int = 1) -> Dict:
     ]
 
     features: List[Dict] = []
-    base_dt = datetime.utcnow()
+    base_dt = datetime.now(timezone.utc)
 
-    # Generate points for each day requested
     for day_offset in range(min(days, 30)):
         dt = base_dt - timedelta(days=day_offset)
         date_str = dt.strftime("%Y-%m-%d")
 
         for i, (lat, lon, conf, zone, bright, frp) in enumerate(base_points):
-            # Slight positional jitter per day so they aren't identical
             if day_offset > 0:
-                import hashlib
                 jitter_seed = int(
-                    hashlib.md5(f"{day_offset}-{i}".encode()).hexdigest()[:8],
+                    hashlib.md5(
+                        f"{day_offset}-{i}".encode()
+                    ).hexdigest()[:8],
                     16,
                 )
                 jitter_lat = ((jitter_seed % 100) - 50) / 1000.0
@@ -510,6 +840,8 @@ def _mock_hotspots(days: int = 1) -> Dict:
                     "coordinates": [lon, lat],
                 },
                 "properties": {
+                    "latitude": lat,
+                    "longitude": lon,
                     "brightness": bright,
                     "confidence": conf,
                     "acq_date": date_str,
@@ -533,7 +865,8 @@ def _mock_hotspots(days: int = 1) -> Dict:
         "metadata": {
             "count": len(features),
             "source": (
-                "MOCK DATA — add NASA_FIRMS_API_KEY to .env for live data"
+                "MOCK DATA — add NASA_FIRMS_API_KEY to .env "
+                "for live data"
             ),
             "sensor": "VIIRS SNPP NRT",
             "days_requested": days,
