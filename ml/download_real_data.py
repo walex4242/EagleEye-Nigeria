@@ -595,14 +595,15 @@ def main() -> None:
 
     print("\n  This will download satellite tiles from Esri World Imagery.")
     print("  Estimated time: 10-20 minutes (depends on connection)")
-    print("  Images will be augmented 5x for robust training.\n")
+    print("  Images will be augmented 8x for robust training.\n")
 
     response = input("  Continue? (Y/n): ").strip().lower()
     if response == "n":
         print("  Aborted.")
         return
 
-    download_dataset(augment_factor=5, val_split=0.2, delay=0.3)
+    # Increased augment_factor from 5 to 8
+    download_dataset(augment_factor=8, val_split=0.2, delay=0.3)
 
     print_current_stats()
 
