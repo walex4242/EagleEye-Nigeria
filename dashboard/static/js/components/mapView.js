@@ -1,10 +1,10 @@
 /* ══════════════════════════════════════════
-   mapView.js — Map Initialization & Layers v3.3
-   Now with:
-   • API module integration (auth token injection)
-   • 60-minute delay banner for anonymous users
-   • Movement intel blocked for anonymous
-   • Delay-aware alert banner
+   mapView.js — Map Initialization & Layers v3.4
+   Changes from v3.3:
+   • Legend shortcuts updated to include X (ML panel)
+   • _updateLegendStates syncs ML button in StatsBar
+   • loadAllData passes map reference to MLView
+     so ML markers layer is always on top
    ══════════════════════════════════════════ */
 
 const MapView = (() => {
@@ -18,7 +18,9 @@ const MapView = (() => {
   const NIGERIA_CENTER = [9.5, 8.0];
   const NIGERIA_ZOOM = 6;
 
-  // ── Init map ──
+  // ══════════════════════════════════════════
+  // INIT MAP
+  // ══════════════════════════════════════════
   function init() {
     map = L.map('map', { zoomControl: true, preferCanvas: true }).setView(
       NIGERIA_CENTER,
@@ -91,13 +93,11 @@ const MapView = (() => {
   }
 
   /* ══════════════════════════════════════════
-     HOME BUTTON — Reset map to default view
-     Sits below the +/- zoom controls
+     HOME BUTTON
      ══════════════════════════════════════════ */
   function _addHomeButton() {
     const HomeControl = L.Control.extend({
       options: { position: 'topleft' },
-
       onAdd: function () {
         const container = L.DomUtil.create(
           'div',
@@ -165,7 +165,7 @@ const MapView = (() => {
   }
 
   /* ══════════════════════════════════════════
-     RESET MAP VIEW — Fits to data or defaults
+     RESET MAP VIEW
      ══════════════════════════════════════════ */
   function resetView(features) {
     if (!map) return;
@@ -188,12 +188,7 @@ const MapView = (() => {
             [minLat - latPad, minLon - lonPad],
             [maxLat + latPad, maxLon + lonPad],
           ],
-          {
-            maxZoom: 12,
-            padding: [30, 30],
-            animate: true,
-            duration: 0.8,
-          },
+          { maxZoom: 12, padding: [30, 30], animate: true, duration: 0.8 },
         );
 
         console.log(
@@ -212,7 +207,7 @@ const MapView = (() => {
   }
 
   /* ══════════════════════════════════════════
-     DELAY BANNER — Security delay UI
+     DELAY BANNER
      ══════════════════════════════════════════ */
   function _showDelayBanner(delayStatus) {
     const banner = el('alert-banner');
@@ -229,11 +224,9 @@ const MapView = (() => {
       withheldMsg +
       ` · Sign in for real-time access`;
 
-    // Style as info (blue) not danger (red)
     banner.classList.add('visible', 'delay-banner');
     banner.classList.remove('threat-banner');
 
-    // Update source note
     const sourceNote = el('source-note');
     if (sourceNote) {
       sourceNote.innerHTML =
@@ -253,22 +246,19 @@ const MapView = (() => {
     const banner = el('alert-banner');
     if (banner) {
       banner.classList.remove('delay-banner');
-      // Only hide if there's no threat alert showing
       if (!banner.classList.contains('threat-banner')) {
         banner.classList.remove('visible');
       }
     }
-
-    // Reset source note
     const sourceNote = el('source-note');
     if (sourceNote) {
       sourceNote.textContent = 'Source: NASA FIRMS · VIIRS SNPP NRT';
     }
   }
 
-  // ══════════════════════════════════════════
-  // LEGEND
-  // ══════════════════════════════════════════
+  /* ══════════════════════════════════════════
+     LEGEND
+     ══════════════════════════════════════════ */
   function addLegend() {
     const legend = L.control({ position: 'bottomright' });
     legend.onAdd = () => {
@@ -341,7 +331,7 @@ const MapView = (() => {
 
         <div class="legend-shortcuts">
           <kbd>R</kbd> refresh &nbsp;<kbd>C</kbd> clusters<br>
-          <kbd>V</kbd> veg &nbsp;<kbd>M</kbd> movement &nbsp;<kbd>I</kbd> intel
+          <kbd>V</kbd> veg &nbsp;<kbd>M</kbd> move &nbsp;<kbd>I</kbd> intel &nbsp;<kbd>X</kbd> ML
         </div>
       `;
 
@@ -354,9 +344,9 @@ const MapView = (() => {
     legend.addTo(map);
   }
 
-  // ══════════════════════════════════════════
-  // LEGEND CLICK HANDLER
-  // ══════════════════════════════════════════
+  /* ══════════════════════════════════════════
+     LEGEND CLICK HANDLER
+     ══════════════════════════════════════════ */
   function _handleLegendClick(e) {
     const row = e.target.closest('[data-filter]');
     const vegRow = e.target.closest('[data-veg]');
@@ -389,13 +379,12 @@ const MapView = (() => {
     }
     if (actionRow && actionRow.dataset.action === 'movement') {
       _handleMovementClick();
-      return;
     }
   }
 
-  // ══════════════════════════════════════════
-  // PRIORITY FILTERING
-  // ══════════════════════════════════════════
+  /* ══════════════════════════════════════════
+     PRIORITY FILTERING
+     ══════════════════════════════════════════ */
   let _activePriorityFilter = null;
 
   function _filterByPriority(priority) {
@@ -472,9 +461,9 @@ const MapView = (() => {
     });
   }
 
-  // ══════════════════════════════════════════
-  // VEGETATION CLICK
-  // ══════════════════════════════════════════
+  /* ══════════════════════════════════════════
+     VEGETATION CLICK
+     ══════════════════════════════════════════ */
   async function _handleVegClick(classification) {
     if (!State.get('vegLayerVisible')) {
       showToast('Enabling vegetation layer...', 'info');
@@ -511,16 +500,17 @@ const MapView = (() => {
       { maxZoom: 11, animate: true, duration: 0.6 },
     );
 
-    const label = classification.replace('_', ' ');
-    showToast(`🌿 Zoomed to ${matching.length} ${label} events`, 'success');
+    showToast(
+      `🌿 Zoomed to ${matching.length} ${classification.replace('_', ' ')} events`,
+      'success',
+    );
     _updateLegendStates();
   }
 
-  // ══════════════════════════════════════════
-  // MOVEMENT CLICK
-  // ══════════════════════════════════════════
+  /* ══════════════════════════════════════════
+     MOVEMENT CLICK
+     ══════════════════════════════════════════ */
   async function _handleMovementClick() {
-    // ── Block if anonymous ──
     const delayStatus = State.get('dataDelayStatus');
     if (delayStatus?.isDelayed) {
       showToast(
@@ -568,9 +558,10 @@ const MapView = (() => {
     _updateLegendStates();
   }
 
-  // ══════════════════════════════════════════
-  // UPDATE LEGEND TOGGLE LABELS
-  // ══════════════════════════════════════════
+  /* ══════════════════════════════════════════
+     UPDATE LEGEND TOGGLE LABELS
+     Also keeps StatsBar ML button in sync
+     ══════════════════════════════════════════ */
   function _updateLegendStates() {
     const vegToggle = document.getElementById('leg-veg-toggle');
     const moveToggle = document.getElementById('leg-move-toggle');
@@ -584,7 +575,6 @@ const MapView = (() => {
 
     if (moveToggle) {
       const on = State.get('movementLayerVisible');
-      // Show lock if anonymous
       if (delayStatus?.isDelayed) {
         moveToggle.textContent = '🔒';
         moveToggle.style.color = 'var(--text-muted)';
@@ -609,17 +599,26 @@ const MapView = (() => {
         row.title = '';
       }
     });
+
+    // ── Keep StatsBar ML button active state in sync ──
+    if (typeof StatsBar !== 'undefined' && StatsBar.setMLActive) {
+      const mlPanelOpen =
+        document.getElementById('ml-panel')?.classList.contains('open') ??
+        false;
+      StatsBar.setMLActive(mlPanelOpen);
+    }
   }
 
-  // ══════════════════════════════════════════
-  // CLEAR ALL LAYERS
-  // ══════════════════════════════════════════
+  /* ══════════════════════════════════════════
+     CLEAR ALL DYNAMIC LAYERS
+     ══════════════════════════════════════════ */
   function _clearAllDynamicLayers() {
     const hotspotLayer = State.get('hotspotLayer');
     if (hotspotLayer) {
       map.removeLayer(hotspotLayer);
       State.set('hotspotLayer', null);
     }
+
     const clusterLayer = State.get('clusterLayer');
     if (clusterLayer) {
       map.removeLayer(clusterLayer);
@@ -652,7 +651,9 @@ const MapView = (() => {
     console.log('[MapView] All dynamic layers cleared');
   }
 
-  // ── Hotspot marker ──
+  /* ══════════════════════════════════════════
+     HOTSPOT MARKER
+     ══════════════════════════════════════════ */
   function createHotspotMarker(f) {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
@@ -667,6 +668,7 @@ const MapView = (() => {
           : priority === 'ELEVATED'
             ? 6
             : 4;
+
     const weight =
       priority === 'CRITICAL' ? 2.5 : priority === 'HIGH' ? 1.5 : 1;
 
@@ -683,7 +685,9 @@ const MapView = (() => {
     return marker;
   }
 
-  // ── Vegetation marker ──
+  /* ══════════════════════════════════════════
+     VEGETATION MARKER
+     ══════════════════════════════════════════ */
   function createVegMarker(evt) {
     const lat = evt.latitude;
     const lon = evt.longitude;
@@ -708,7 +712,9 @@ const MapView = (() => {
     return marker;
   }
 
-  // ── Render hotspots ──
+  /* ══════════════════════════════════════════
+     RENDER HOTSPOTS
+     ══════════════════════════════════════════ */
   function renderHotspots(features) {
     const hotspotLayer = State.get('hotspotLayer');
     const clusterLayer = State.get('clusterLayer');
@@ -767,7 +773,9 @@ const MapView = (() => {
     setText('leg-monitor', counts.MONITOR);
   }
 
-  // ── Vegetation layer ──
+  /* ══════════════════════════════════════════
+     VEGETATION LAYER
+     ══════════════════════════════════════════ */
   function renderVegetationLayer() {
     const vgl = State.get('vegLayerGroup');
     if (vgl) {
@@ -795,7 +803,9 @@ const MapView = (() => {
     _updateLegendStates();
   }
 
-  // ── Movement layer ──
+  /* ══════════════════════════════════════════
+     MOVEMENT LAYER
+     ══════════════════════════════════════════ */
   function renderMovementLayer() {
     const mgl = State.get('movementLayerGroup');
     if (mgl) {
@@ -835,6 +845,7 @@ const MapView = (() => {
       const arrow = L.marker([mv.destination_lat, mv.destination_lon], {
         icon: arrowIcon,
       });
+
       const origin = L.circleMarker([mv.origin_lat, mv.origin_lon], {
         radius: 5,
         color,
@@ -860,7 +871,9 @@ const MapView = (() => {
     _updateLegendStates();
   }
 
-  // ── Monitoring zones ──
+  /* ══════════════════════════════════════════
+     MONITORING ZONES
+     ══════════════════════════════════════════ */
   function renderMonitoringZones() {
     const zgl = State.get('zonesLayerGroup');
     if (zgl) {
@@ -902,7 +915,9 @@ const MapView = (() => {
     State.set('zonesLayerGroup', gl);
   }
 
-  // ── Toggle functions ──
+  /* ══════════════════════════════════════════
+     TOGGLE FUNCTIONS
+     ══════════════════════════════════════════ */
   function toggleClustering() {
     const val = !State.get('useClustering');
     State.set('useClustering', val);
@@ -918,7 +933,6 @@ const MapView = (() => {
     const val = !State.get('vegLayerVisible');
     State.set('vegLayerVisible', val);
     el('veg-toggle')?.classList.toggle('veg-on', val);
-
     if (val && State.get('vegEvents').length === 0) {
       await loadVegetationEvents();
     } else {
@@ -931,7 +945,6 @@ const MapView = (() => {
     const val = !State.get('zonesVisible');
     State.set('zonesVisible', val);
     el('zones-toggle')?.classList.toggle('active', val);
-
     if (val && State.get('monitoringZones').length === 0) {
       await loadMonitoringZones();
     } else {
@@ -940,7 +953,6 @@ const MapView = (() => {
   }
 
   async function toggleMovementLayer() {
-    // ── Block if anonymous ──
     const delayStatus = State.get('dataDelayStatus');
     if (delayStatus?.isDelayed) {
       showToast(
@@ -949,11 +961,9 @@ const MapView = (() => {
       );
       return;
     }
-
     const val = !State.get('movementLayerVisible');
     State.set('movementLayerVisible', val);
     el('movement-toggle')?.classList.toggle('move-on', val);
-
     if (val && !State.get('movementData')) {
       await loadMovementData();
     }
@@ -961,7 +971,9 @@ const MapView = (() => {
     _updateLegendStates();
   }
 
-  // ── Filter ──
+  /* ══════════════════════════════════════════
+     FILTER
+     ══════════════════════════════════════════ */
   function getFilteredFeatures() {
     const f = el('confidence-filter')?.value || 'all';
     const all = State.get('allFeatures');
@@ -985,13 +997,14 @@ const MapView = (() => {
     _updateLegendHighlight(null);
     const resetBtn = document.getElementById('leg-reset');
     if (resetBtn) resetBtn.style.display = 'none';
-
     const filtered = getFilteredFeatures();
     renderHotspots(filtered);
     resetView(filtered);
   }
 
-  // ── Navigation ──
+  /* ══════════════════════════════════════════
+     NAVIGATION
+     ══════════════════════════════════════════ */
   function zoomTo(lat, lon) {
     map.setView([lat, lon], 12, { animate: true, duration: 0.6 });
   }
@@ -1023,10 +1036,9 @@ const MapView = (() => {
     );
   }
 
-  // ══════════════════════════════════════════
-  // DATA LOADERS — All use API module
-  // ══════════════════════════════════════════
-
+  /* ══════════════════════════════════════════
+     DATA LOADERS
+     ══════════════════════════════════════════ */
   async function loadVegetationEvents() {
     try {
       const events = await API.getVegetationEvents(200);
@@ -1063,7 +1075,6 @@ const MapView = (() => {
         return;
       }
 
-      // ── Check if movement was blocked for anonymous ──
       const delayStatus = API.checkDelayStatus(data);
       if (delayStatus?.isDelayed) {
         console.log('[Movement] Blocked for anonymous — delayed access');
@@ -1118,7 +1129,9 @@ const MapView = (() => {
     }
   }
 
-  // ── Alert banner (delay-aware) ──
+  /* ══════════════════════════════════════════
+     ALERT BANNER (delay-aware)
+     ══════════════════════════════════════════ */
   function checkAlerts(features, summary) {
     const banner = el('alert-banner');
     const text = el('alert-banner-text');
@@ -1153,27 +1166,23 @@ const MapView = (() => {
     if (critAlerts.length)
       msgs.push(`🚨 ${critAlerts.length} CRITICAL movement alerts`);
 
-    // ── Combine with delay notice if anonymous ──
     const delayStatus = State.get('dataDelayStatus');
 
     if (msgs.length) {
-      if (delayStatus?.isDelayed) {
-        // Prepend delay notice to threat messages
-        text.textContent =
-          `🔒 ${delayStatus.delayMinutes}min delay · ` +
+      text.textContent = delayStatus?.isDelayed
+        ? `🔒 ${delayStatus.delayMinutes}min delay · ` +
           msgs.join('  ·  ') +
-          ` · Sign in for real-time`;
-      } else {
-        text.textContent = msgs.join('  ·  ');
-      }
+          ` · Sign in for real-time`
+        : msgs.join('  ·  ');
       banner.classList.add('visible', 'threat-banner');
     } else if (!banner.classList.contains('delay-banner')) {
-      // Only hide if no delay banner either
       banner.classList.remove('visible', 'threat-banner');
     }
   }
 
-  // ── Health checks ──
+  /* ══════════════════════════════════════════
+     HEALTH CHECKS
+     ══════════════════════════════════════════ */
   async function checkHealth() {
     try {
       const data = await API.checkHealth();
@@ -1200,7 +1209,7 @@ const MapView = (() => {
   }
 
   /* ══════════════════════════════════════════
-     MAIN DATA LOAD — With delay awareness
+     MAIN DATA LOAD
      ══════════════════════════════════════════ */
   async function loadAllData() {
     const loading = el('loading-overlay');
@@ -1216,14 +1225,14 @@ const MapView = (() => {
         loadingText.textContent =
           'Fetching thermal hotspots from NASA FIRMS...';
 
-      // ── 1. Clear all existing layers ──
+      // 1. Clear all existing layers
       _clearAllDynamicLayers();
 
-      // ── 2. Reset confidence filter ──
+      // 2. Reset confidence filter
       const confFilter = el('confidence-filter');
       if (confFilter) confFilter.value = 'all';
 
-      // ── 3. Fetch data via API module (sends auth token) ──
+      // 3. Fetch data
       const [hotspotData, summaryData] = await Promise.all([
         API.getHotspots(days),
         API.getSummary(days),
@@ -1232,7 +1241,7 @@ const MapView = (() => {
       const features = hotspotData.features || [];
       State.set('allFeatures', features);
 
-      // ── 4. Check security delay metadata ──
+      // 4. Check security delay metadata
       const delayStatus = API.checkDelayStatus(hotspotData);
       State.set('dataDelayStatus', delayStatus);
 
@@ -1250,19 +1259,19 @@ const MapView = (() => {
 
       State.set('summaryData', summaryData);
 
-      // ── 5. Render hotspots ──
+      // 5. Render hotspots
       renderHotspots(features);
 
-      // ── 6. Reset map view ──
+      // 6. Reset map view
       resetView(features);
 
-      // ── 7. Update stats bar ──
+      // 7. Update stats bar
       StatsBar.update(summaryData, features);
 
       if (loadingText)
         loadingText.textContent = 'Loading intelligence layers...';
 
-      // ── 8. Load secondary layers ──
+      // 8. Load secondary layers
       const secondaryResults = await Promise.allSettled([
         checkHealth(),
         loadSentinel2Health(),

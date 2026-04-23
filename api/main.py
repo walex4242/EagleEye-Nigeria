@@ -193,8 +193,8 @@ print("[INIT] ✓ Core routes registered (hotspots, acled, alerts).")
 # ── Optional Routes ───────────────────────────────────────────
 try:
     from api.routes.ml import router as ml_router
-    app.include_router(ml_router, prefix="/api/v1", tags=["ML Inference"])
-    print("[INIT] ✓ ML routes registered.")
+    app.include_router(ml_router, prefix="/api/v1", tags=["ML Intelligence"])
+    print("[INIT] ✓ ML routes registered (predict, analyze, scan).")
 except ImportError as e:
     print(f"[INIT] ML routes not available: {e}")
 
@@ -262,13 +262,18 @@ async def health_check():
         "firms_data": True,
         "analysis": True,
         "ml_detector": False,
+        "ml_scan_hotspots": False,
+        "ml_analyze_location": False,
         "acled": False,
         "sentinel2": False,
     }
 
     try:
-        from ml.detector import TORCH_AVAILABLE
-        components["ml_detector"] = TORCH_AVAILABLE
+        from ml.detector import TORCH_AVAILABLE, WEIGHTS_PATH
+        ml_ready = TORCH_AVAILABLE and WEIGHTS_PATH.exists()
+        components["ml_detector"] = ml_ready
+        components["ml_scan_hotspots"] = ml_ready
+        components["ml_analyze_location"] = ml_ready
     except ImportError:
         pass
 
@@ -280,7 +285,7 @@ async def health_check():
     return {
         "status": "operational",
         "project": "EagleEye-Nigeria",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "admin_url": "/admin",
         "components": components,
     }

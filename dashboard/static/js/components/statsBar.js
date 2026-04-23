@@ -1,5 +1,10 @@
 /* ══════════════════════════════════════════
-   statsBar.js — Stats Bar Component v3.2
+   statsBar.js — Stats Bar Component v3.3
+   Changes from v3.2:
+   • Added 🧠 ML button to desktop layer toggles
+   • Added 🧠 ML button to mobile layer toggles
+   • Added setMLActive() public method so MLView
+     can keep the button in sync when panel opens/closes
    ══════════════════════════════════════════ */
 
 const StatsBar = (() => {
@@ -116,16 +121,18 @@ const StatsBar = (() => {
 
         <!-- Layer toggles (hidden on mobile, accessible via drawer) -->
         <div class="layer-btns hide-mobile">
-          <button class="lbtn active" id="cluster-toggle"  title="Toggle clusters (C)" type="button">⬡ Clusters</button>
-          <button class="lbtn"        id="veg-toggle"      title="Vegetation layer (V)" type="button">🌿 Veg</button>
-          <button class="lbtn"        id="zones-toggle"    title="Zones overlay (Z)" type="button">📐 Zones</button>
-          <button class="lbtn"        id="movement-toggle" title="Movement vectors (M)" type="button">🧭 Move</button>
-          <button class="lbtn"        id="panel-toggle"    title="Intelligence panel (I)" type="button">📊 Intel</button>
+          <button class="lbtn active" id="cluster-toggle"  title="Toggle clusters (C)"          type="button">⬡ Clusters</button>
+          <button class="lbtn"        id="veg-toggle"      title="Vegetation layer (V)"          type="button">🌿 Veg</button>
+          <button class="lbtn"        id="zones-toggle"    title="Zones overlay (Z)"             type="button">📐 Zones</button>
+          <button class="lbtn"        id="movement-toggle" title="Movement vectors (M)"          type="button">🧭 Move</button>
+          <button class="lbtn"        id="panel-toggle"    title="Intelligence panel (I)"        type="button">📊 Intel</button>
+          <button class="lbtn"        id="ml-toggle"       title="ML Analysis panel (X)"         type="button">🧠 ML</button>
         </div>
 
-        <!-- Intel panel button on mobile -->
+        <!-- Mobile buttons -->
         <div class="layer-btns show-mobile">
           <button class="lbtn" id="panel-toggle-mobile" type="button">📊 Intel</button>
+          <button class="lbtn" id="ml-toggle-mobile"    type="button">🧠 ML</button>
         </div>
 
         <button class="refresh-btn" id="refresh-btn" type="button"
@@ -213,6 +220,24 @@ const StatsBar = (() => {
         Sidebar.toggle();
       }
     });
+
+    // ── ML panel toggle — desktop ──
+    _bindBtn('ml-toggle', () => {
+      if (typeof MLView !== 'undefined') {
+        MLView.togglePanel();
+      } else {
+        showToast('ML module not loaded', 'warning');
+      }
+    });
+
+    // ── ML panel toggle — mobile ──
+    _bindBtn('ml-toggle-mobile', () => {
+      if (typeof MLView !== 'undefined') {
+        MLView.togglePanel();
+      } else {
+        showToast('ML module not loaded', 'warning');
+      }
+    });
   }
 
   /* ── Helper: safe button binding ── */
@@ -224,7 +249,7 @@ const StatsBar = (() => {
   }
 
   /* ══════════════════════════════════════
-     Refresh Handler — THE FIX
+     Refresh Handler
      ══════════════════════════════════════ */
   async function _handleRefresh() {
     const refreshBtn = el('refresh-btn');
@@ -475,14 +500,30 @@ const StatsBar = (() => {
   }
 
   /* ══════════════════════════════════════
-     Public: getDays() — helper for other
-     modules to read the selected range
+     Public: setMLActive()
+     Called by MLView.openPanel / closePanel
+     to keep the toolbar button highlighted
+     when the ML panel is open
+     ══════════════════════════════════════ */
+  function setMLActive(isActive) {
+    const btn = el('ml-toggle');
+    const btnMob = el('ml-toggle-mobile');
+    [btn, btnMob].forEach((b) => {
+      if (b) b.classList.toggle('active', !!isActive);
+    });
+  }
+
+  /* ══════════════════════════════════════
+     Public: getDays()
      ══════════════════════════════════════ */
   function getDays() {
     const sel = el('days-select');
     return sel ? parseInt(sel.value, 10) : 2;
   }
 
+  /* ══════════════════════════════════════
+     Public: getFilter()
+     ══════════════════════════════════════ */
   function getFilter() {
     const sel = el('confidence-filter');
     return sel ? sel.value : 'all';
@@ -493,6 +534,7 @@ const StatsBar = (() => {
     update,
     filterByPriority,
     setRefreshing,
+    setMLActive,
     getDays,
     getFilter,
   };

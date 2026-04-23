@@ -982,6 +982,20 @@ function buildHotspotPopup(f) {
             🛰️ Satellite
           </a>
         </div>
+
+        <button
+          onclick="if(typeof MLView!=='undefined') MLView.analyzeCoordinate(${lat}, ${lon}, 17)"
+          style="margin-top:6px;width:100%;padding:8px;
+                 background:rgba(31,111,235,0.15);
+                 border:1px solid rgba(59,158,255,0.4);
+                 border-radius:5px;color:#3b9eff;
+                 font-size:12px;font-weight:700;
+                 cursor:pointer;transition:background 0.15s"
+          onmouseover="this.style.background='rgba(31,111,235,0.3)'"
+          onmouseout="this.style.background='rgba(31,111,235,0.15)'"
+        >
+          🧠 Analyze with ML
+        </button>
         <div style="margin-top:6px;text-align:center">
           <a href="/api/v1/hotspots/states?state=${encodeURIComponent(stateName)}" target="_blank"
              style="font-size:11px;color:#3b9eff;text-decoration:none">

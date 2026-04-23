@@ -1,5 +1,10 @@
 /* ══════════════════════════════════════════
-   app.js — Main Bootstrap v3.1
+   app.js — Main Bootstrap v3.2
+   Changes from v3.1:
+   • DOMContentLoaded is now async
+   • MLView.init() called after MapView.init()
+   • Keyboard shortcut X → toggle ML panel
+   • Escape also closes ML panel
    ══════════════════════════════════════════ */
 
 // ── PWA Service Worker ──
@@ -14,14 +19,25 @@ if ('serviceWorker' in navigator) {
 }
 
 // ── Init on DOM ready ──
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   // 1. Render shell components
   Navbar.render();
   StatsBar.render();
   Sidebar.render();
   MapView.init();
 
-  // 2. Auth UI state
+  // 2. ML panel — must init BEFORE loadAllData so the panel
+  //    DOM exists when hotspot popups try to call analyzeCoordinate()
+  if (typeof MLView !== 'undefined') {
+    try {
+      await MLView.init();
+      console.log('[EagleEye] MLView initialized ✓');
+    } catch (err) {
+      console.warn('[EagleEye] MLView init failed (non-fatal):', err);
+    }
+  }
+
+  // 3. Auth UI state
   if (typeof Auth !== 'undefined') {
     Navbar.updateUserWidget();
     if (!Auth.isLoggedIn()) {
@@ -29,10 +45,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // 3. Initial data load
+  // 4. Initial data load
   MapView.loadAllData();
 
-  // 4. Keyboard shortcuts
+  // 5. Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     // Don't intercept when typing in inputs
     if (
@@ -46,35 +62,55 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'r':
         MapView.loadAllData();
         break;
+
       case 'c':
         MapView.toggleClustering();
         break;
+
       case 'v':
         MapView.toggleVegetationLayer();
         break;
+
       case 'm':
         MapView.toggleMovementLayer();
         break;
+
       case 'z':
         MapView.toggleMonitoringZones();
         break;
+
       case 'i':
         Sidebar.toggle();
         break;
+
       case 'h':
         MapView.resetView(State.get('allFeatures'));
         showToast('🏠 Map view reset', 'info');
         break;
+
+      // ── ML panel toggle ──
+      case 'x':
+        if (typeof MLView !== 'undefined') {
+          MLView.togglePanel();
+        }
+        break;
+
       case 'escape':
+        // Close sidebar if open
         if (document.getElementById('side-panel')?.classList.contains('open')) {
           Sidebar.close();
         }
+        // Close ML panel if open
+        if (typeof MLView !== 'undefined') {
+          MLView.closePanel();
+        }
+        // Close navbar drawer
         Navbar.closeDrawer();
         break;
     }
   });
 
-  // 5. Auto-refresh every 5 minutes
+  // 6. Auto-refresh every 5 minutes
   setInterval(
     () => {
       console.log('[EagleEye] Auto-refreshing data...');
@@ -83,7 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
     5 * 60 * 1000,
   );
 
-  // 6. Auth token refresh every 60s
+  // 7. Auth token refresh every 60s
   if (typeof Auth !== 'undefined') {
     setInterval(() => Auth.refreshIfNeeded?.(), 60 * 1000);
   }
