@@ -37,6 +37,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  if (typeof PredictionView !== 'undefined') {
+    PredictionView.init();
+    console.log('[EagleEye] PredictionView initialized ✓');
+  }
+
   // 3. Auth UI state
   if (typeof Auth !== 'undefined') {
     Navbar.updateUserWidget();

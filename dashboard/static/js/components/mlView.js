@@ -1,20 +1,28 @@
 /* ══════════════════════════════════════════
-   mlView.js — ML Analysis Panel v1.2
-   Fixes from v1.1:
-   • _drawStart null crash — named draw handlers
-     stored in _drawHandlers, removed precisely
-     instead of nuking all map click listeners
-   • _finishAreaDraw null guard added
-   • _cancelAreaDraw removes only OUR listeners
-   • scanArea response normalized — backend uses
-     flagged / grid_points_scanned, frontend
-     expected flagged_count / total_scanned
-   • _plotResultsOnMap resolves coords from
-     nested location:{lat,lon} wrapper that
-     area-scan and hotspot-scan responses use
-   • _unwrapResult now also checks raw.prediction
-     before falling back, matching backend shape
-   • 60-second AbortController timeout on scanArea
+   mlView.js — ML Analysis Panel v1.3
+   Changes from v1.2:
+   • Added _LEVEL_CONFIG — single source of truth
+     for human-readable level names, descriptions,
+     action items, colors, and icons
+   • Added _formatReport() — generates clean,
+     readable HTML reports replacing raw backend
+     labels like "CRITICAL -- IMMEDIATE_INVESTIGATION"
+   • Added _normalizeLevel() — maps any backend
+     level string to a known enum safely
+   • Added _confidenceBar() — visual confidence
+     indicator with color gradient
+   • Added _formatTimestamp() — readable dates
+   • Replaced all calls to API.formatMLResult()
+     with _formatReport() for consistency
+   • Kept API.getRecommendationColor/Icon as
+     fallbacks but primary styling now comes
+     from _LEVEL_CONFIG
+   • Popup and panel results now show:
+       – Plain-English threat level name
+       – Clear action recommendation
+       – Confidence bar with percentage
+       – Classification label in readable form
+       – Timestamp of analysis
    ══════════════════════════════════════════ */
 
 const MLView = (() => {
@@ -25,15 +33,300 @@ const MLView = (() => {
   let _clickListenerActive = false;
   let _drawRect = null;
   let _drawStart = null;
-  let _drawHandlers = null; // ← NEW: named handlers for precise removal
+  let _drawHandlers = null;
   let _modelReady = false;
+
+  /* ══════════════════════════════════════
+     LEVEL CONFIGURATION
+     Single source of truth for every
+     threat level the backend can return.
+     ══════════════════════════════════════ */
+  const _LEVEL_CONFIG = {
+    critical: {
+      key: 'critical',
+      label: 'Critical Threat',
+      summary: 'Immediate attention required',
+      description:
+        'This location shows strong indicators consistent with ' +
+        'illegal encampment activity. High-confidence detection ' +
+        'suggests urgent verification is warranted.',
+      action:
+        'Dispatch a verification team as soon as possible. ' +
+        'Coordinate with local authorities and document findings.',
+      color: '#f85149',
+      bgColor: 'rgba(248, 81, 73, 0.08)',
+      borderColor: 'rgba(248, 81, 73, 0.4)',
+      icon: 'fa-exclamation-triangle',
+      cssClass: 'ml-level-critical',
+    },
+    high: {
+      key: 'high',
+      label: 'High Concern',
+      summary: 'Investigation recommended',
+      description:
+        'This location exhibits notable features that may indicate ' +
+        'encampment presence. The detection confidence supports ' +
+        'prioritized follow-up.',
+      action:
+        'Schedule a review within 24–48 hours. Cross-reference ' +
+        'with recent patrol data and neighboring hotspot reports.',
+      color: '#fb8f44',
+      bgColor: 'rgba(251, 143, 68, 0.08)',
+      borderColor: 'rgba(251, 143, 68, 0.4)',
+      icon: 'fa-exclamation-circle',
+      cssClass: 'ml-level-high',
+    },
+    medium: {
+      key: 'medium',
+      label: 'Moderate Interest',
+      summary: 'Worth monitoring',
+      description:
+        'Some features at this location are consistent with potential ' +
+        'activity, but confidence is moderate. This may reflect ' +
+        'ambiguous terrain or partial indicators.',
+      action:
+        'Add to the monitoring queue. Re-scan in the next ' +
+        'scheduled cycle or if new hotspot data emerges nearby.',
+      color: '#d29922',
+      bgColor: 'rgba(210, 153, 34, 0.08)',
+      borderColor: 'rgba(210, 153, 34, 0.4)',
+      icon: 'fa-info-circle',
+      cssClass: 'ml-level-medium',
+    },
+    low: {
+      key: 'low',
+      label: 'Low Concern',
+      summary: 'No significant indicators',
+      description:
+        'This location does not show strong signs of encampment ' +
+        'activity. The classification suggests normal terrain or ' +
+        'vegetation patterns.',
+      action:
+        'No immediate action needed. Location will be ' +
+        'revisited in routine scanning cycles.',
+      color: '#3fb950',
+      bgColor: 'rgba(63, 185, 80, 0.08)',
+      borderColor: 'rgba(63, 185, 80, 0.4)',
+      icon: 'fa-check-circle',
+      cssClass: 'ml-level-low',
+    },
+    unknown: {
+      key: 'unknown',
+      label: 'Unclassified',
+      summary: 'Could not determine threat level',
+      description:
+        'The model returned a result but the threat level could not ' +
+        'be mapped to a known category. This may indicate a backend ' +
+        'version mismatch or an unexpected classification label.',
+      action:
+        'Review the raw model output manually. Consider ' +
+        're-running the analysis or checking model status.',
+      color: '#8b949e',
+      bgColor: 'rgba(139, 148, 158, 0.08)',
+      borderColor: 'rgba(139, 148, 158, 0.4)',
+      icon: 'fa-question-circle',
+      cssClass: 'ml-level-unknown',
+    },
+  };
+
+  /* ══════════════════════════════════════
+     LEVEL NORMALIZER
+     Maps any backend level string to a
+     known _LEVEL_CONFIG key.
+     Handles shapes like:
+       "CRITICAL"
+       "IMMEDIATE_INVESTIGATION"
+       "CRITICAL -- IMMEDIATE_INVESTIGATION"
+       "high_priority"
+       "LOW_CONCERN"
+     ══════════════════════════════════════ */
+  function _normalizeLevel(raw) {
+    if (!raw || typeof raw !== 'string') return 'unknown';
+
+    const s = raw
+      .toLowerCase()
+      .replace(/[^a-z]/g, ' ')
+      .trim();
+
+    // Direct match first
+    if (_LEVEL_CONFIG[s]) return s;
+
+    // Keyword scanning — order matters (most severe first)
+    if (/critical|immediate|emergency|urgent/.test(s)) return 'critical';
+    if (/high|elevated|priority|investigate/.test(s)) return 'high';
+    if (/medium|moderate|watch|monitor|caution/.test(s)) return 'medium';
+    if (/low|minimal|normal|clear|none|no.?concern/.test(s)) return 'low';
+
+    return 'unknown';
+  }
+
+  /* ══════════════════════════════════════
+     CLASSIFICATION LABEL FORMATTER
+     Turns raw model labels like
+     "illegal_encampment" into
+     "Illegal Encampment"
+     ══════════════════════════════════════ */
+  function _formatClassLabel(raw) {
+    if (!raw || typeof raw !== 'string') return 'Unknown';
+    return raw
+      .replace(/[_-]/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+      .trim();
+  }
+
+  /* ══════════════════════════════════════
+     CONFIDENCE BAR
+     Visual indicator with gradient color
+     ══════════════════════════════════════ */
+  function _confidenceBar(confidence, levelConfig) {
+    const pct =
+      confidence != null
+        ? (confidence > 1 ? confidence : confidence * 100).toFixed(1)
+        : null;
+
+    if (pct === null) return '';
+
+    const color = levelConfig.color;
+    return `
+      <div class="ml-confidence-row">
+        <span class="ml-confidence-label">Confidence</span>
+        <div class="ml-confidence-track">
+          <div class="ml-confidence-fill"
+               style="width:${pct}%;background:${color};"></div>
+        </div>
+        <span class="ml-confidence-pct">${pct}%</span>
+      </div>`;
+  }
+
+  /* ══════════════════════════════════════
+     TIMESTAMP FORMATTER
+     ══════════════════════════════════════ */
+  function _formatTimestamp(ts) {
+    if (!ts) return null;
+    try {
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return null;
+      return d.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /* ══════════════════════════════════════
+     REPORT FORMATTER — the core change
+     Replaces API.formatMLResult() usage
+     with a clean, readable HTML report.
+     ══════════════════════════════════════ */
+  function _formatReport(result, recommendation) {
+    if (!result) {
+      return `<div class="ml-report ml-report-empty">
+                <p>No analysis data available.</p>
+              </div>`;
+    }
+
+    // ── Pull fields from either shape ──
+    const rawLevel =
+      recommendation?.level ||
+      result?.level ||
+      result?.threat_level ||
+      result?.recommendation?.level ||
+      '';
+    const levelKey = _normalizeLevel(rawLevel);
+    const cfg = _LEVEL_CONFIG[levelKey];
+
+    const classLabel = _formatClassLabel(
+      result.label || result.class || result.classification || '',
+    );
+
+    const confidence =
+      result.confidence ?? result.score ?? result.probability ?? null;
+
+    const rawMessage =
+      recommendation?.message ||
+      result?.message ||
+      recommendation?.description ||
+      '';
+
+    const timestamp =
+      _formatTimestamp(result.timestamp || result.analyzed_at) ||
+      _formatTimestamp(new Date().toISOString());
+
+    // ── Build HTML ──
+    return `
+      <div class="ml-report" style="
+        background:${cfg.bgColor};
+        border:1px solid ${cfg.borderColor};
+        border-left:4px solid ${cfg.color};
+        border-radius:6px;
+        padding:12px 14px;
+      ">
+        <!-- Header: icon + level label -->
+        <div class="ml-report-header">
+          <div class="ml-report-icon" style="color:${cfg.color}">
+            <i class="fas ${cfg.icon}"></i>
+          </div>
+          <div class="ml-report-title-block">
+            <div class="ml-report-level ${cfg.cssClass}">
+              ${cfg.label}
+            </div>
+            <div class="ml-report-summary">${cfg.summary}</div>
+          </div>
+        </div>
+
+        <!-- Classification -->
+        <div class="ml-report-classification">
+          <span class="ml-report-field-label">Classification</span>
+          <span class="ml-report-field-value">${classLabel}</span>
+        </div>
+
+        <!-- Confidence bar -->
+        ${_confidenceBar(confidence, cfg)}
+
+        <!-- Description -->
+        <div class="ml-report-desc">
+          ${cfg.description}
+        </div>
+
+        <!-- Recommended action -->
+        <div class="ml-report-action">
+          <i class="fas fa-clipboard-list"></i>
+          <div>
+            <strong>Recommended Action</strong>
+            <p>${cfg.action}</p>
+          </div>
+        </div>
+
+        ${
+          rawMessage && rawMessage !== cfg.description
+            ? `<div class="ml-report-raw-note">
+                 <span class="ml-report-field-label">Model note</span>
+                 <span>${rawMessage}</span>
+               </div>`
+            : ''
+        }
+
+        <!-- Timestamp -->
+        ${
+          timestamp
+            ? `<div class="ml-report-meta">
+                 <i class="fas fa-clock"></i> Analyzed ${timestamp}
+               </div>`
+            : ''
+        }
+      </div>`;
+  }
 
   /* ══════════════════════════════════════
      BOOTSTRAP
      ══════════════════════════════════════ */
   async function init() {
     _buildPanel();
-    _bindToolbarButton(); // no-op — button is in statsBar
+    _bindToolbarButton();
     _bindPanelEvents();
     await _checkModelStatus();
     console.log('[MLView] Initialized ✓');
@@ -242,11 +535,8 @@ const MLView = (() => {
 
   /* ══════════════════════════════════════
      TOOLBAR BUTTON
-     No-op — button now lives in statsBar.js
      ══════════════════════════════════════ */
   function _bindToolbarButton() {
-    // The ML button is rendered by statsBar.js (#ml-toggle).
-    // The keyboard shortcut X is handled by app.js.
     console.log('[MLView] Toolbar button managed by StatsBar ✓');
   }
 
@@ -355,8 +645,6 @@ const MLView = (() => {
 
   /* ══════════════════════════════════════
      ERROR HELPER
-     Extracts a readable message from any
-     error shape the backend might return.
      ══════════════════════════════════════ */
   function _extractError(err) {
     if (!err) return 'Unknown error';
@@ -376,21 +664,28 @@ const MLView = (() => {
 
   /* ══════════════════════════════════════
      RESULT UNWRAPPER
-     Backend sometimes wraps in { result: {...} }
-     or { prediction: {...} }.
-     Always returns the flat label/confidence obj.
      ══════════════════════════════════════ */
   function _unwrapResult(raw) {
     if (!raw) return null;
-    // { result: { label, confidence, … } }
     if (raw.result && typeof raw.result === 'object') return raw.result;
-    // { prediction: { label, confidence, … } }
     if (raw.prediction && typeof raw.prediction === 'object')
       return raw.prediction;
-    // Already flat: { label, confidence, … }
     if (raw.label !== undefined) return raw;
-    // Nothing recognisable — pass through so UI shows what it has
     return raw;
+  }
+
+  /* ══════════════════════════════════════
+     TOAST LEVEL — readable toast messages
+     ══════════════════════════════════════ */
+  function _toastLevel(levelKey) {
+    const map = {
+      critical: 'Critical Threat detected',
+      high: 'High Concern flagged',
+      medium: 'Moderate Interest noted',
+      low: 'Low Concern — area appears clear',
+      unknown: 'Analysis complete (unclassified)',
+    };
+    return map[levelKey] || map.unknown;
   }
 
   /* ══════════════════════════════════════
@@ -414,7 +709,6 @@ const MLView = (() => {
       const raw = await API.scanHotspots(days, limit);
       console.log('[MLView] scanHotspots raw response:', raw);
 
-      // Normalise backend field names → frontend names
       const result = {
         ...raw,
         total_scanned: raw.total_scanned ?? raw.scanned ?? 0,
@@ -427,7 +721,11 @@ const MLView = (() => {
       _setLoading(btn, prog, false);
       _renderScanResults(result, summ);
       _plotResultsOnMap(result.flagged_locations, null, null);
-      showToast(`ML scan done — ${result.flagged_count} flagged`, 'success');
+
+      const msg = result.flagged_count
+        ? `Scan complete — ${result.flagged_count} location${result.flagged_count > 1 ? 's' : ''} flagged for review`
+        : 'Scan complete — no suspicious locations detected';
+      showToast(msg, result.flagged_count ? 'warning' : 'success');
     } catch (err) {
       _setLoading(btn, prog, false);
       showToast('Hotspot scan failed: ' + _extractError(err), 'error');
@@ -435,22 +733,13 @@ const MLView = (() => {
     }
   }
 
-  /**
-   * Pull the list of flagged location objects out of a scan response,
-   * handling both the area-scan shape { flagged_locations: [...] }
-   * and the hotspot-scan shape { results: [{ status:'analyzed', … }] }.
-   */
   function _extractFlaggedLocations(raw) {
-    // Area scan: already has flagged_locations array
     if (Array.isArray(raw.flagged_locations)) return raw.flagged_locations;
-
-    // Hotspot scan: results array, filter to flagged only
     if (Array.isArray(raw.results)) {
       return raw.results.filter(
         (r) => r.status === 'analyzed' && r.prediction?.flag === true,
       );
     }
-
     return [];
   }
 
@@ -485,8 +774,15 @@ const MLView = (() => {
       </div>
       ${
         flagged
-          ? `<p class="ml-summ-note">${flagged} suspicious location${flagged > 1 ? 's' : ''} marked on map.</p>`
-          : '<p class="ml-summ-note ok">✅ No suspicious encampments detected.</p>'
+          ? `<p class="ml-summ-note">
+               <i class="fas fa-map-marker-alt"></i>
+               ${flagged} location${flagged > 1 ? 's' : ''} flagged for review
+               — markers placed on the map.
+             </p>`
+          : `<p class="ml-summ-note ok">
+               <i class="fas fa-check-circle"></i>
+               No suspicious encampment indicators detected across all scanned locations.
+             </p>`
       }
     `;
     container.classList.remove('hidden');
@@ -516,11 +812,6 @@ const MLView = (() => {
     await _analyzeWithCoords(lat, lon, zoom);
   }
 
-  /* ══════════════════════════════════════
-     CORE ANALYSIS
-     Used by _runCoordinateAnalysis and
-     the public analyzeCoordinate() method.
-     ══════════════════════════════════════ */
   async function _analyzeWithCoords(lat, lon, zoom) {
     const btn = document.getElementById('ml-coord-btn');
     const prog = document.getElementById('ml-coord-progress');
@@ -544,7 +835,12 @@ const MLView = (() => {
       _plotResultsOnMap([raw], lat, lon);
       window._map?.setView([lat, lon], 14, { animate: true });
 
-      showToast(`Analysis complete — ${rec.level || 'UNKNOWN'}`, 'success');
+      // ── Readable toast ──
+      const levelKey = _normalizeLevel(rec.level);
+      showToast(
+        _toastLevel(levelKey),
+        levelKey === 'low' ? 'success' : 'warning',
+      );
     } catch (err) {
       _setLoading(btn, prog, false);
       showToast('Analysis failed: ' + _extractError(err), 'error');
@@ -560,9 +856,9 @@ const MLView = (() => {
       container.classList.remove('hidden');
       return;
     }
-    const color = API.getRecommendationColor(rec?.level);
-    container.innerHTML = API.formatMLResult(result, rec);
-    container.style.borderLeft = `3px solid ${color}`;
+    // ── Use our own _formatReport instead of API.formatMLResult ──
+    container.innerHTML = _formatReport(result, rec);
+    container.style.borderLeft = 'none';
     container.classList.remove('hidden');
   }
 
@@ -599,7 +895,10 @@ const MLView = (() => {
       if (latInput) latInput.value = lat.toFixed(5);
       if (lonInput) lonInput.value = lng.toFixed(5);
 
-      showToast(`Picked ${lat.toFixed(4)}, ${lng.toFixed(4)}`, 'info');
+      showToast(
+        `Selected ${lat.toFixed(4)}, ${lng.toFixed(4)} — running analysis…`,
+        'info',
+      );
       _runCoordinateAnalysis();
     });
   }
@@ -617,13 +916,8 @@ const MLView = (() => {
 
   /* ══════════════════════════════════════
      AREA DRAW
-     Uses named handler refs stored in
-     _drawHandlers so _cancelAreaDraw can
-     remove ONLY our listeners, not all map
-     click listeners.
      ══════════════════════════════════════ */
   function _startAreaDraw() {
-    // Toggle off if already drawing
     if (_drawStart !== null || _drawHandlers !== null) {
       _cancelAreaDraw();
       return;
@@ -635,19 +929,17 @@ const MLView = (() => {
       btn.classList.add('picking');
     }
 
-    showToast('Click first corner of the scan area', 'info');
+    showToast('Click the first corner of the scan area', 'info');
     window._map?.getContainer().classList.add('ml-crosshair');
 
     function onFirstClick(e) {
       _drawStart = { lat: e.latlng.lat, lon: e.latlng.lng };
       showToast('Now click the opposite corner', 'info');
       window._map?.on('mousemove', _updateDrawRect);
-      // Register second-click handler — stored so cancel can remove it
       window._map?.once('click', _drawHandlers.onSecondClick);
     }
 
     function onSecondClick(e) {
-      // Guard against race: draw cancelled between first and second click
       if (_drawStart === null) return;
       _finishAreaDraw(e.latlng.lat, e.latlng.lng);
     }
@@ -673,7 +965,6 @@ const MLView = (() => {
   }
 
   function _finishAreaDraw(lat2, lon2) {
-    // Null guard — belt and braces
     if (_drawStart === null) {
       console.warn('[MLView] _finishAreaDraw called with null _drawStart');
       return;
@@ -684,7 +975,6 @@ const MLView = (() => {
     const lonMin = Math.min(_drawStart.lon, lon2);
     const lonMax = Math.max(_drawStart.lon, lon2);
 
-    // keepRect=true so the blue rectangle stays visible
     _cancelAreaDraw(true);
 
     const latMinEl = document.getElementById('ml-lat-min');
@@ -697,18 +987,16 @@ const MLView = (() => {
     if (lonMinEl) lonMinEl.value = lonMin.toFixed(4);
     if (lonMaxEl) lonMaxEl.value = lonMax.toFixed(4);
 
-    showToast('Area selected — click Scan Area to run ML', 'info');
+    showToast('Area selected — click "Scan Area" to run ML analysis', 'info');
   }
 
   function _cancelAreaDraw(keepRect = false) {
-    // Remove ONLY our named listeners — not every map click handler
     if (_drawHandlers) {
       window._map?.off('click', _drawHandlers.onFirstClick);
       window._map?.off('click', _drawHandlers.onSecondClick);
       _drawHandlers = null;
     }
 
-    // Clear state AFTER listener removal
     _drawStart = null;
     window._map?.off('mousemove', _updateDrawRect);
     window._map?.getContainer().classList.remove('ml-crosshair');
@@ -755,13 +1043,12 @@ const MLView = (() => {
 
     if (estTiles > 400) {
       showToast(
-        `⚠ Estimated ${estTiles} tiles — reduce area or increase grid step`,
+        `Area too large (≈${estTiles} tiles). Reduce area or increase grid step.`,
         'warning',
       );
       return;
     }
 
-    // Grab DOM refs once
     const btn = document.getElementById('ml-area-btn');
     const prog = document.getElementById('ml-area-progress');
     const summ = document.getElementById('ml-area-summary');
@@ -771,10 +1058,9 @@ const MLView = (() => {
       return;
     }
 
-    _setLoading(btn, prog, true, `Scanning ≈${estTiles} tiles…`);
+    _setLoading(btn, prog, true, `Scanning approximately ${estTiles} tiles…`);
     summ?.classList.add('hidden');
 
-    // Remove the draw rectangle now that we're scanning
     if (_drawRect) {
       window._map?.removeLayer(_drawRect);
       _drawRect = null;
@@ -792,9 +1078,6 @@ const MLView = (() => {
       const raw = await API.scanArea(latMin, latMax, lonMin, lonMax, gridStep);
       console.log('[MLView] scanArea raw response:', raw);
 
-      // ── Normalise backend → frontend field names ──────────────────
-      // Backend:  flagged / grid_points_scanned / grid_points_total
-      // Frontend: flagged_count / total_scanned / skipped
       const scanned = raw.grid_points_scanned ?? raw.total_scanned ?? 0;
       const total = raw.grid_points_total ?? scanned;
       const flagged = raw.flagged ?? raw.flagged_count ?? 0;
@@ -808,7 +1091,6 @@ const MLView = (() => {
         duration_seconds: raw.duration_seconds ?? null,
         flagged_locations: raw.flagged_locations ?? [],
       };
-      // ─────────────────────────────────────────────────────────────
 
       _setLoading(btn, prog, false);
       _renderScanResults(result, summ);
@@ -822,10 +1104,10 @@ const MLView = (() => {
         { animate: true, duration: 0.6 },
       );
 
-      showToast(
-        `Area scan done — ${flagged} flagged of ${scanned} scanned`,
-        'success',
-      );
+      const msg = flagged
+        ? `Area scan complete — ${flagged} of ${scanned} locations flagged for review`
+        : `Area scan complete — all ${scanned} locations appear clear`;
+      showToast(msg, flagged ? 'warning' : 'success');
     } catch (err) {
       console.error('[MLView] scanArea error:', err);
       _setLoading(btn, prog, false);
@@ -843,7 +1125,7 @@ const MLView = (() => {
       (f) => f.type === 'image/jpeg' || f.type === 'image/png',
     );
     if (_stagedFiles.length === 0) {
-      showToast('No valid images (JPEG/PNG only)', 'warning');
+      showToast('No valid images selected (JPEG or PNG only)', 'warning');
       return;
     }
 
@@ -865,14 +1147,14 @@ const MLView = (() => {
     }
     if (btn) btn.classList.remove('hidden');
     showToast(
-      `${_stagedFiles.length} image(s) staged — click Classify`,
+      `${_stagedFiles.length} image${_stagedFiles.length > 1 ? 's' : ''} ready — click Classify to analyze`,
       'info',
     );
   }
 
   async function _runUploadClassify() {
     if (_stagedFiles.length === 0) {
-      showToast('No images staged', 'warning');
+      showToast('No images staged for classification', 'warning');
       return;
     }
     if (!_assertModelReady()) return;
@@ -885,7 +1167,7 @@ const MLView = (() => {
       btn,
       prog,
       true,
-      `Classifying ${_stagedFiles.length} image(s)…`,
+      `Classifying ${_stagedFiles.length} image${_stagedFiles.length > 1 ? 's' : ''}…`,
     );
     if (res) res.classList.add('hidden');
 
@@ -900,6 +1182,7 @@ const MLView = (() => {
       _setLoading(btn, prog, false);
       _renderUploadResults(results, res);
       _stagedFiles = [];
+      showToast('Classification complete — results shown below', 'success');
     } catch (err) {
       _setLoading(btn, prog, false);
       showToast('Classification failed: ' + _extractError(err), 'error');
@@ -912,7 +1195,7 @@ const MLView = (() => {
     const preds = results.predictions || results.results || [];
     if (!preds.length) {
       container.innerHTML =
-        '<p style="color:var(--text-muted)">No results returned.</p>';
+        '<p style="color:var(--text-muted)">No results returned by the model.</p>';
       container.classList.remove('hidden');
       return;
     }
@@ -920,11 +1203,10 @@ const MLView = (() => {
       .map((p) => {
         const inner = _unwrapResult(p);
         const rec = p.recommendation || inner?.recommendation || {};
-        const color = API.getRecommendationColor(rec.level);
         return `
-          <div class="ml-upload-pred" style="border-left:3px solid ${color}">
-            ${p.filename ? `<div class="ml-pred-file">${p.filename}</div>` : ''}
-            ${API.formatMLResult(inner, rec)}
+          <div class="ml-upload-pred">
+            ${p.filename ? `<div class="ml-pred-file"><i class="fas fa-image"></i> ${p.filename}</div>` : ''}
+            ${_formatReport(inner, rec)}
           </div>`;
       })
       .join('');
@@ -933,12 +1215,6 @@ const MLView = (() => {
 
   /* ══════════════════════════════════════
      MAP MARKERS — ML Results Layer
-     Handles every coordinate shape the
-     backend might return:
-       • { lat, lon }
-       • { latitude, longitude }
-       • { location: { lat, lon } }
-       • fallback lat/lon passed by caller
      ══════════════════════════════════════ */
   function _plotResultsOnMap(locations, fallbackLat, fallbackLon) {
     if (!window._map || !locations?.length) return;
@@ -948,7 +1224,6 @@ const MLView = (() => {
     }
 
     locations.forEach((raw) => {
-      // ── Resolve coordinates ───────────────────────────────────────
       const lat =
         raw.lat ??
         raw.latitude ??
@@ -964,29 +1239,24 @@ const MLView = (() => {
         raw.location?.longitude ??
         raw.location?.lng ??
         fallbackLon;
-      // ─────────────────────────────────────────────────────────────
 
       if (lat == null || lon == null || isNaN(lat) || isNaN(lon)) {
         console.warn('[MLView] Skipping marker — no coordinates:', raw);
         return;
       }
 
-      // ── Unwrap result payload ─────────────────────────────────────
-      // area-scan:     { location, prediction, recommendation }
-      // hotspot-scan:  { location, prediction, recommendation }
-      // coord-analyze: { location, result,     recommendation }
       const inner = _unwrapResult(raw.result ?? raw.prediction ?? raw);
       const rec = raw.recommendation ?? inner?.recommendation ?? {};
-      // ─────────────────────────────────────────────────────────────
 
-      const color = API.getRecommendationColor(rec.level);
-      const icon = API.getRecommendationIcon(rec.level);
+      // ── Use _LEVEL_CONFIG for consistent styling ──
+      const levelKey = _normalizeLevel(rec.level);
+      const cfg = _LEVEL_CONFIG[levelKey];
 
       const markerIcon = L.divIcon({
         className: '',
         html: `<div class="ml-map-marker"
-                    style="background:${color};box-shadow:0 0 8px ${color}99;">
-                 <i class="fas ${icon}"></i>
+                    style="background:${cfg.color};box-shadow:0 0 8px ${cfg.color}99;">
+                 <i class="fas ${cfg.icon}"></i>
                </div>`,
         iconSize: [28, 28],
         iconAnchor: [14, 14],
@@ -994,7 +1264,19 @@ const MLView = (() => {
       });
 
       const marker = L.marker([lat, lon], { icon: markerIcon });
-      marker.bindPopup(API.formatMLResult(inner, rec), { maxWidth: 340 });
+
+      // ── Popup uses _formatReport for readable output ──
+      marker.bindPopup(
+        `<div style="min-width:260px;max-width:340px;">
+           <div style="font-size:11px;color:#8b949e;margin-bottom:6px;">
+             <i class="fas fa-map-pin"></i>
+             ${parseFloat(lat).toFixed(5)}, ${parseFloat(lon).toFixed(5)}
+           </div>
+           ${_formatReport(inner, rec)}
+         </div>`,
+        { maxWidth: 380 },
+      );
+
       _mlResultsLayer.addLayer(marker);
     });
 
@@ -1004,7 +1286,7 @@ const MLView = (() => {
   function clearMLLayer() {
     _mlResultsLayer?.clearLayers();
     _updateMarkerCount();
-    showToast('ML layer cleared', 'info');
+    showToast('ML markers cleared from map', 'info');
   }
 
   function _updateMarkerCount() {
@@ -1019,7 +1301,7 @@ const MLView = (() => {
      ══════════════════════════════════════ */
   function _assertModelReady() {
     if (_modelReady) return true;
-    showToast('ML model is not loaded — check server status', 'error');
+    showToast('ML model is not loaded — please check server status', 'error');
     _checkModelStatus();
     return false;
   }
@@ -1047,12 +1329,14 @@ const MLView = (() => {
 
   /* ══════════════════════════════════════
      CSS — injected once
+     Includes new report + confidence styles
      ══════════════════════════════════════ */
   function _injectStyles() {
     if (document.getElementById('ml-panel-styles')) return;
     const style = document.createElement('style');
     style.id = 'ml-panel-styles';
     style.textContent = `
+      /* ── Base panel ── */
       .ml-panel {
         position:fixed; top:60px; right:-420px; width:400px;
         max-height:calc(100vh - 80px); overflow-y:auto;
@@ -1063,6 +1347,8 @@ const MLView = (() => {
         color:#c9d1d9; box-shadow:-4px 0 24px rgba(0,0,0,.6);
       }
       .ml-panel.open { right:0; }
+
+      /* ── Header ── */
       .ml-panel-header {
         display:flex; align-items:center; gap:8px;
         padding:12px 14px 10px; border-bottom:1px solid #1e2d3d; flex-shrink:0;
@@ -1074,12 +1360,16 @@ const MLView = (() => {
         cursor:pointer; font-size:16px; padding:0 4px; transition:color .15s;
       }
       .ml-close-btn:hover { color:#e8eef8; }
+
+      /* ── Capabilities row ── */
       .ml-caps {
         display:flex; flex-wrap:wrap; gap:6px 12px;
         padding:8px 14px; border-bottom:1px solid #1e2d3d;
         font-size:11px; color:#8b949e; flex-shrink:0;
       }
       .ml-caps strong { color:#c9d1d9; }
+
+      /* ── Tabs ── */
       .ml-tabs { display:flex; border-bottom:1px solid #1e2d3d; flex-shrink:0; }
       .ml-tab {
         flex:1; padding:8px 4px; background:none; border:none;
@@ -1092,6 +1382,8 @@ const MLView = (() => {
       .ml-tab-content { display:none; padding:14px; }
       .ml-tab-content.active { display:block; }
       .ml-tab-desc { font-size:11px; color:#8b949e; margin:0 0 12px; line-height:1.5; }
+
+      /* ── Form elements ── */
       .ml-form-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
       .ml-form-row label {
         display:flex; flex-direction:column; gap:4px;
@@ -1104,6 +1396,8 @@ const MLView = (() => {
       }
       .ml-form-row input:focus,
       .ml-form-row select:focus { outline:none; border-color:#3b9eff; }
+
+      /* ── Buttons ── */
       .ml-primary-btn, .ml-secondary-btn, .ml-ghost-btn {
         width:100%; padding:8px 12px; border-radius:5px; font-size:12px;
         font-weight:600; cursor:pointer; display:flex; align-items:center;
@@ -1121,10 +1415,14 @@ const MLView = (() => {
       .ml-btn-row { display:flex; gap:8px; }
       .ml-btn-row .ml-secondary-btn,
       .ml-btn-row .ml-primary-btn { flex:1; }
+
+      /* ── Progress ── */
       .ml-progress {
         font-size:11px; color:#8b949e; margin-top:8px; padding:6px;
         background:#161b22; border-radius:4px; border-left:3px solid #3b9eff;
       }
+
+      /* ── Summary grid ── */
       .ml-summary-grid {
         display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:8px;
       }
@@ -1137,53 +1435,192 @@ const MLView = (() => {
       .ml-summ-lbl { display:block; font-size:10px; color:#8b949e; margin-top:2px; }
       .ml-summ-note { font-size:11px; color:#8b949e; margin:0; }
       .ml-summ-note.ok { color:#3fb950; }
+
+      /* ── Result block ── */
       .ml-result-block {
         margin-top:10px; padding:10px; background:#161b22;
-        border-radius:5px; border-left:3px solid #3b9eff;
+        border-radius:5px;
       }
-      .ml-result .ml-label      { font-weight:700; font-size:13px; margin-bottom:4px; }
-      .ml-result .ml-confidence { font-size:11px; color:#8b949e; }
-      .ml-result .ml-level      { font-size:11px; font-weight:700; margin-top:6px; }
-      .ml-result .ml-message    { font-size:11px; color:#8b949e; margin-top:2px; }
+
+      /* ── Report card (NEW in v1.3) ── */
+      .ml-report {
+        font-size:12px; line-height:1.5;
+      }
+      .ml-report-empty {
+        color:#8b949e; padding:12px; text-align:center;
+      }
+      .ml-report-header {
+        display:flex; align-items:flex-start; gap:10px; margin-bottom:10px;
+      }
+      .ml-report-icon {
+        font-size:20px; flex-shrink:0; margin-top:1px;
+      }
+      .ml-report-title-block { flex:1; }
+      .ml-report-level {
+        font-weight:700; font-size:14px; line-height:1.2;
+      }
+      .ml-report-summary {
+        font-size:11px; color:#8b949e; margin-top:2px;
+      }
+      .ml-report-classification {
+        display:flex; justify-content:space-between; align-items:center;
+        padding:6px 8px; background:rgba(255,255,255,.03);
+        border-radius:4px; margin-bottom:8px;
+      }
+      .ml-report-field-label {
+        font-size:10px; color:#6e7681; text-transform:uppercase;
+        letter-spacing:.5px;
+      }
+      .ml-report-field-value {
+        font-weight:600; color:#e8eef8;
+      }
+
+      /* ── Confidence bar ── */
+      .ml-confidence-row {
+        display:flex; align-items:center; gap:8px; margin-bottom:10px;
+      }
+      .ml-confidence-label {
+        font-size:10px; color:#6e7681; text-transform:uppercase;
+        letter-spacing:.5px; flex-shrink:0; width:68px;
+      }
+      .ml-confidence-track {
+        flex:1; height:6px; background:#21262d;
+        border-radius:3px; overflow:hidden;
+      }
+      .ml-confidence-fill {
+        height:100%; border-radius:3px;
+        transition:width .4s ease;
+      }
+      .ml-confidence-pct {
+        font-size:11px; font-weight:600; color:#c9d1d9;
+        min-width:40px; text-align:right;
+      }
+
+            /* ── Description & action ── */
+      .ml-report-desc {
+        font-size:11px; color:#8b949e; margin-bottom:10px;
+        line-height:1.55;
+      }
+      .ml-report-action {
+        display:flex; gap:8px; padding:8px 10px;
+        background:rgba(255,255,255,.03); border-radius:4px;
+        margin-bottom:8px; align-items:flex-start;
+      }
+      .ml-report-action i {
+        color:#3b9eff; margin-top:3px; flex-shrink:0;
+      }
+      .ml-report-action div {
+        flex:1;
+      }
+      .ml-report-action strong {
+        font-size:11px; color:#c9d1d9; display:block; margin-bottom:2px;
+      }
+      .ml-report-action p {
+        font-size:11px; color:#8b949e; margin:0; line-height:1.5;
+      }
+
+      /* ── Raw note from model ── */
+      .ml-report-raw-note {
+        display:flex; flex-direction:column; gap:2px;
+        padding:6px 8px; background:rgba(255,255,255,.02);
+        border-radius:4px; margin-bottom:8px;
+        font-size:11px; color:#8b949e;
+        border-left:2px solid #30363d;
+      }
+
+      /* ── Timestamp meta ── */
+      .ml-report-meta {
+        font-size:10px; color:#6e7681; margin-top:4px;
+        display:flex; align-items:center; gap:5px;
+      }
+      .ml-report-meta i {
+        font-size:10px;
+      }
+
+      /* ── Level color classes ── */
       .ml-level-critical { color:#f85149; }
       .ml-level-high     { color:#fb8f44; }
       .ml-level-medium   { color:#d29922; }
       .ml-level-low      { color:#3fb950; }
+      .ml-level-unknown  { color:#8b949e; }
+
+      /* ── Drop zone ── */
       .ml-drop-zone {
         border:2px dashed #30363d; border-radius:6px; padding:24px 12px;
         text-align:center; cursor:pointer; color:#8b949e;
         transition:border-color .15s, background .15s;
       }
-      .ml-drop-zone:hover, .ml-drop-zone.drag-over { border-color:#3b9eff; background:#161b22; }
+      .ml-drop-zone:hover, .ml-drop-zone.drag-over {
+        border-color:#3b9eff; background:#161b22;
+      }
       .ml-drop-zone p { margin:6px 0 0; font-size:12px; }
+
+      /* ── Upload queue ── */
       .ml-upload-queue { margin:8px 0; }
       .ml-queue-item {
         display:flex; align-items:center; gap:8px; padding:5px 6px;
         background:#161b22; border-radius:4px; margin-bottom:3px; font-size:11px;
       }
       .ml-queue-item .fa-image { color:#3b9eff; }
-      .ml-queue-item span:nth-child(2) { flex:1; overflow:hidden; text-overflow:ellipsis; }
+      .ml-queue-item span:nth-child(2) {
+        flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      }
       .ml-queue-size { color:#6e7681; }
+
+      /* ── Upload prediction cards ── */
       .ml-upload-pred {
         margin-bottom:8px; padding:8px; background:#0d1117;
         border-radius:4px; border:1px solid #21262d;
       }
-      .ml-pred-file { font-size:10px; color:#8b949e; margin-bottom:4px; }
+      .ml-pred-file {
+        font-size:10px; color:#8b949e; margin-bottom:6px;
+        display:flex; align-items:center; gap:5px;
+      }
+
+      /* ── Footer ── */
       .ml-footer {
         display:flex; align-items:center; gap:8px;
         padding:8px 14px; border-top:1px solid #1e2d3d; flex-shrink:0;
       }
-      .ml-marker-count { font-size:11px; color:#6e7681; flex:1; text-align:center; }
+      .ml-marker-count {
+        font-size:11px; color:#6e7681; flex:1; text-align:center;
+      }
+
+      /* ── Map marker ── */
       .ml-map-marker {
         width:28px; height:28px; border-radius:50%;
         display:flex; align-items:center; justify-content:center;
         color:#fff; font-size:14px; border:2px solid rgba(255,255,255,.25);
       }
+
+      /* ── Crosshair cursor for map picking ── */
       .ml-crosshair,
       .ml-crosshair .leaflet-interactive { cursor:crosshair !important; }
+
+      /* ── Utility ── */
+      .hidden { display:none !important; }
+
+      /* ── Leaflet popup overrides for ML reports ── */
+      .leaflet-popup-content .ml-report {
+        font-size:11px;
+      }
+      .leaflet-popup-content .ml-report-level {
+        font-size:13px;
+      }
+      .leaflet-popup-content .ml-report-action p,
+      .leaflet-popup-content .ml-report-desc {
+        font-size:10px;
+      }
+      .leaflet-popup-content .ml-confidence-label {
+        width:58px;
+      }
+
+      /* ── Mobile ── */
       @media (max-width:480px) {
         .ml-panel { width:100vw; border-radius:0; }
         .ml-panel.open { right:0; }
+        .ml-summary-grid { grid-template-columns:repeat(2,1fr); }
+        .ml-report-action { flex-direction:column; }
       }
     `;
     document.head.appendChild(style);
@@ -1226,14 +1663,32 @@ const MLView = (() => {
       if (!_modelReady) await _checkModelStatus();
 
       if (!_modelReady) {
-        showToast('ML model is not loaded — check server status', 'error');
+        showToast(
+          'ML model is not loaded — please check server status',
+          'error',
+        );
         return;
       }
 
       return _analyzeWithCoords(numLat, numLon, numZoom);
     },
 
+    /**
+     * Programmatic access to plot results on the map layer.
+     */
     plotResults: _plotResultsOnMap,
+
+    /**
+     * Expose level config for external consumers
+     * (e.g. legend builders, export tools).
+     */
+    getLevelConfig: () => ({ ..._LEVEL_CONFIG }),
+
+    /**
+     * Expose the normalizer so other modules can
+     * translate backend levels consistently.
+     */
+    normalizeLevel: _normalizeLevel,
   };
 })();
 

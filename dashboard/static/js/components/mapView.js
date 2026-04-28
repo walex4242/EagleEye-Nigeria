@@ -559,6 +559,17 @@ const MapView = (() => {
   }
 
   /* ══════════════════════════════════════════
+   PREDICTION FETCH & RENDER
+   Called by any map interaction that has
+   a coordinate — marker click, popup open.
+   Keeps prediction logic in one place.
+   ══════════════════════════════════════════ */
+  async function _fetchAndRenderPrediction({ lat, lng, feature }) {
+    if (typeof PredictionView === 'undefined') return;
+    PredictionView.openPanel();
+  }
+
+  /* ══════════════════════════════════════════
      UPDATE LEGEND TOGGLE LABELS
      Also keeps StatsBar ML button in sync
      ══════════════════════════════════════════ */
@@ -606,6 +617,15 @@ const MapView = (() => {
         document.getElementById('ml-panel')?.classList.contains('open') ??
         false;
       StatsBar.setMLActive(mlPanelOpen);
+    }
+
+    // After the existing ML sync block:
+    if (typeof StatsBar !== 'undefined' && StatsBar.setPredictActive) {
+      const predPanelOpen =
+        document
+          .getElementById('prediction-panel')
+          ?.classList.contains('open') ?? false;
+      StatsBar.setPredictActive(predPanelOpen);
     }
   }
 
@@ -682,6 +702,13 @@ const MapView = (() => {
     });
 
     marker.bindPopup(buildHotspotPopup(f), { maxWidth: 380 });
+
+    marker.on('popupclose', () => {
+      if (typeof PredictionView !== 'undefined') {
+        PredictionView.closePanel();
+      }
+    });
+
     return marker;
   }
 
@@ -698,17 +725,24 @@ const MapView = (() => {
     const icon = L.divIcon({
       className: '',
       html: `<div style="
-        width:${size}px; height:${size}px;
-        background:${color}; border:2px solid ${color};
-        transform:rotate(45deg); border-radius:2px;
-        opacity:0.85; box-shadow:0 0 6px ${color}66;
-      "></div>`,
+      width:${size}px; height:${size}px;
+      background:${color}; border:2px solid ${color};
+      transform:rotate(45deg); border-radius:2px;
+      opacity:0.85; box-shadow:0 0 6px ${color}66;
+    "></div>`,
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
     });
 
     const marker = L.marker([lat, lon], { icon });
     marker.bindPopup(buildVegPopup(evt), { maxWidth: 380 });
+
+    marker.on('popupclose', () => {
+      if (typeof PredictionView !== 'undefined') {
+        PredictionView.closePanel();
+      }
+    });
+
     return marker;
   }
 

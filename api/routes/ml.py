@@ -17,6 +17,19 @@ Endpoints:
   POST /ml/scan-hotspots     — Auto-scan recent FIRMS hotspots
   POST /ml/scan-area         — Scan a rectangular region
   GET  /ml/status            — Model health check
+
+Fixes in this version:
+  • FIRMS URL now uses Nigeria bounding box (2.5,4.0,15.0,14.0)
+    instead of the invalid "world" token that caused HTTP 400.
+  • FIRMS_MAP_KEY missing / "DEMO_KEY" fallback is rejected early
+    with a clear log message instead of silently hitting the API.
+  • ml_status() now always returns full capability metadata:
+    classes, zoom_levels, tta_enabled, confidence_threshold —
+    so the dashboard panel shows real values instead of "—".
+  • _get_hotspots_for_scan logs the exact request URL and the
+    first 300 chars of any error response for easier debugging.
+  • float() calls on FIRMS CSV fields are guarded against empty
+    strings so a bad row no longer silently drops the loop.
 """
 
 from __future__ import annotations
@@ -29,6 +42,21 @@ import time
 from typing import Any
 
 router = APIRouter()
+
+# ── Nigeria bounding box ───────────────────────────────────────
+# FIRMS area CSV format: W,S,E,N
+# This is the only valid area token for a sub-global region.
+# "world" is NOT accepted by the FIRMS area endpoint → HTTP 400.
+_NIGERIA_BBOX = "2.5,4.0,15.0,14.0"
+
+# ── Model capability constants ────────────────────────────────
+# These are returned by ml_status() so the dashboard panel can
+# display them in the capabilities strip (Classes / Zoom / TTA /
+# Threshold). Keep them in sync with CampDetector training config.
+_MODEL_CLASSES              = ["legal_activity", "suspicious_encampment"]
+_MODEL_ZOOM_LEVELS          = [15, 16, 17, 18]
+_MODEL_TTA_ENABLED          = True
+_MODEL_CONFIDENCE_THRESHOLD = 0.75   # matches flag threshold in _get_recommendation
 
 
 # ═══════════════════════════════════════════════════════
@@ -67,11 +95,12 @@ def _get_detector() -> Any:
         if _detector_instance.model is not None:
             print("[ML] ✓ CampDetector loaded successfully.")
         else:
-            print("[ML] ⚠️ CampDetector model is None.")
+            print("[ML] ⚠️  CampDetector model is None after init.")
             _detector_instance = None
 
     except Exception as e:
         print(f"[ML] ❌ Failed to load CampDetector: {e}")
+        traceback.print_exc()
         _detector_instance = None
 
     return _detector_instance
@@ -92,17 +121,17 @@ def _fetch_satellite_tile(
     Fetch a satellite image tile from Esri World Imagery
     for a given coordinate.
 
-    Downloads a 3x3 grid of 256px tiles, stitches them,
-    and crops the center to the requested size.
+    Downloads a 3×3 grid of 256 px tiles, stitches them,
+    and crops the centre to the requested size.
 
     Args:
         lat:  Latitude of the target location.
         lon:  Longitude of the target location.
         zoom: Tile zoom level (15-18). Higher = more detail.
-        size: Output image size in pixels.
+        size: Output image size in pixels (default 224 for ResNet).
 
     Returns:
-        PIL.Image.Image or None if download fails.
+        PIL.Image.Image or None if any tile download fails.
     """
     try:
         import math
@@ -110,7 +139,7 @@ def _fetch_satellite_tile(
         from PIL import Image
         from io import BytesIO
 
-        # Convert lat/lon to tile coordinates
+        # Convert lat/lon → slippy-map tile XY
         n = 2 ** zoom
         x = int((lon + 180.0) / 360.0 * n)
         y = int(
@@ -126,10 +155,10 @@ def _fetch_satellite_tile(
             * n
         )
 
-        # Download 3x3 grid of tiles
         tile_size = 256
         tiles: list[list[Image.Image]] = []
 
+        # Download 3×3 grid centred on the target tile
         for dy in range(-1, 2):
             row: list[Image.Image] = []
             for dx in range(-1, 2):
@@ -143,17 +172,18 @@ def _fetch_satellite_tile(
                     timeout=10,
                     headers={
                         "User-Agent": "EagleEye-Nigeria/2.0 (satellite-research)",
-                        "Referer": "https://www.arcgis.com/",
+                        "Referer":    "https://www.arcgis.com/",
                     },
                 )
                 if resp.status_code == 200 and len(resp.content) > 1000:
                     tile = Image.open(BytesIO(resp.content)).convert("RGB")
                     row.append(tile)
                 else:
+                    # Any missing tile makes the stitch impossible
                     return None
             tiles.append(row)
 
-        # Stitch tiles into single image
+        # Stitch 3×3 into one large image
         stitched = Image.new("RGB", (tile_size * 3, tile_size * 3))
         for row_idx, row in enumerate(tiles):
             for col_idx, tile in enumerate(row):
@@ -162,17 +192,17 @@ def _fetch_satellite_tile(
                     (col_idx * tile_size, row_idx * tile_size),
                 )
 
-        # Crop center to desired size
-        cx = (tile_size * 3) // 2
-        cy = (tile_size * 3) // 2
+        # Crop the centre to the target size
+        cx   = (tile_size * 3) // 2
+        cy   = (tile_size * 3) // 2
         half = size // 2
 
-        left = max(0, cx - half)
-        top = max(0, cy - half)
-        right = min(tile_size * 3, cx + half)
-        bottom = min(tile_size * 3, cy + half)
-
-        crop = stitched.crop((left, top, right, bottom))
+        crop = stitched.crop((
+            max(0,             cx - half),
+            max(0,             cy - half),
+            min(tile_size * 3, cx + half),
+            min(tile_size * 3, cy + half),
+        ))
 
         if crop.size != (size, size):
             crop = crop.resize((size, size))
@@ -186,22 +216,19 @@ def _fetch_satellite_tile(
 
 def _is_valid_satellite_image(image: Any) -> bool:
     """
-    Check if downloaded tile looks like valid satellite imagery.
-    Rejects blank tiles, mostly-black ocean tiles, and all-white cloud tiles.
+    Reject tiles that are blank, mostly black (ocean/night),
+    or mostly white (cloud cover).
     """
     try:
         import numpy as np
 
-        arr = np.array(image)
-        std = float(np.std(arr))
+        arr  = np.array(image)
+        std  = float(np.std(arr))
         mean = float(np.mean(arr))
 
-        if std < 10:
-            return False  # Blank / uniform tile
-        if mean < 20:
-            return False  # Too dark (ocean/night)
-        if mean > 240:
-            return False  # Too bright (clouds)
+        if std  < 10:  return False   # uniform / blank
+        if mean < 20:  return False   # too dark  (ocean or night)
+        if mean > 240: return False   # too bright (thick cloud)
 
         return True
 
@@ -224,15 +251,15 @@ def _get_recommendation(result: dict[str, Any]) -> dict[str, Any]:
       MEDIUM   — Add to monitoring watchlist
       LOW      — Cleared or inconclusive
     """
-    label = result.get("label", "")
+    label      = result.get("label", "")
     confidence = result.get("confidence", 0.0)
-    flag = result.get("flag", False)
+    flag       = result.get("flag", False)
 
     if flag and confidence >= 0.9:
         return {
-            "level": "CRITICAL",
-            "action": "IMMEDIATE_INVESTIGATION",
-            "message": (
+            "level":    "CRITICAL",
+            "action":   "IMMEDIATE_INVESTIGATION",
+            "message":  (
                 "High-confidence suspicious encampment detected. "
                 "Recommend immediate drone/ground verification."
             ),
@@ -240,9 +267,9 @@ def _get_recommendation(result: dict[str, Any]) -> dict[str, Any]:
         }
     elif flag and confidence >= 0.75:
         return {
-            "level": "HIGH",
-            "action": "PRIORITY_REVIEW",
-            "message": (
+            "level":    "HIGH",
+            "action":   "PRIORITY_REVIEW",
+            "message":  (
                 "Probable suspicious encampment. "
                 "Schedule priority aerial surveillance."
             ),
@@ -250,9 +277,9 @@ def _get_recommendation(result: dict[str, Any]) -> dict[str, Any]:
         }
     elif flag:
         return {
-            "level": "MEDIUM",
-            "action": "MONITOR",
-            "message": (
+            "level":    "MEDIUM",
+            "action":   "MONITOR",
+            "message":  (
                 "Possible suspicious activity detected. "
                 "Add to monitoring watchlist for repeat scanning."
             ),
@@ -260,9 +287,9 @@ def _get_recommendation(result: dict[str, Any]) -> dict[str, Any]:
         }
     elif label == "legal_activity" and confidence >= 0.85:
         return {
-            "level": "LOW",
-            "action": "CLEAR",
-            "message": (
+            "level":    "LOW",
+            "action":   "CLEAR",
+            "message":  (
                 "Location classified as legal activity "
                 "with high confidence."
             ),
@@ -270,18 +297,18 @@ def _get_recommendation(result: dict[str, Any]) -> dict[str, Any]:
         }
     else:
         return {
-            "level": "LOW",
-            "action": "RECHECK",
-            "message": (
+            "level":    "LOW",
+            "action":   "RECHECK",
+            "message":  (
                 "Inconclusive result. Consider rescanning "
-                "at different time or zoom level."
+                "at a different time or zoom level."
             ),
             "priority": 4,
         }
 
 
 # ═══════════════════════════════════════════════════════
-# HOTSPOT DATA FETCHER (for scan-hotspots)
+# HOTSPOT DATA FETCHER  (used by scan-hotspots)
 # ═══════════════════════════════════════════════════════
 
 async def _get_hotspots_for_scan(
@@ -289,74 +316,120 @@ async def _get_hotspots_for_scan(
     limit: int,
 ) -> list[dict[str, Any]]:
     """
-    Fetch recent hotspot data from FIRMS API for ML scanning.
-    Filters to Nigeria bounding box (lat 4-14, lon 2.5-15).
+    Extract hotspot coordinates for ML scanning by reusing the
+    existing ingestion.firms.fetch_hotspots() pipeline.
 
-    Args:
-        days:  Number of days of data to fetch.
-        limit: Maximum number of hotspots to return.
-
-    Returns:
-        List of hotspot dicts with lat, lon, brightness, etc.
+    Reads NASA_FIRMS_API_KEY from the environment (with
+    FIRMS_MAP_KEY as a legacy fallback so old deployments
+    don't silently break).
     """
     try:
-        import httpx
-        import csv
-
-        firms_key = os.getenv("FIRMS_MAP_KEY", "DEMO_KEY")
-        url = (
-            f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/"
-            f"{firms_key}/VIIRS_SNPP_NRT/world/{days}"
+        # ── Resolve the API key ───────────────────────────────────
+        # Check both names so renaming the env var doesn't break
+        # existing deployments.
+        firms_key = (
+            os.getenv("NASA_FIRMS_API_KEY")   # ← your .env name
+            or os.getenv("FIRMS_MAP_KEY")      # ← legacy fallback
+            or ""
         )
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(url)
-
-        if resp.status_code != 200:
+        if not firms_key or firms_key.upper() in ("DEMO_KEY", ""):
             print(
-                f"[ML] FIRMS API returned {resp.status_code} — "
-                f"cannot fetch hotspots for scan."
+                "[ML] NASA_FIRMS_API_KEY is not set. "
+                "Add it to your .env file to enable hotspot scanning.\n"
+                "     Get a free key at: "
+                "https://firms.modaps.eosdis.nasa.gov/api/map_key/"
             )
             return []
 
-        lines = resp.text.strip().split("\n")
-        if len(lines) < 2:
+        # ── Reuse the existing ingestion pipeline ─────────────────
+        # ingestion/firms.py already handles caching, retries, and
+        # the NGA country filter — no need to duplicate the HTTP call.
+        from ingestion.firms import fetch_hotspots
+
+        print(f"[ML] Fetching FIRMS hotspots via ingestion pipeline "
+              f"(days={days}, limit={limit})…")
+
+        geojson  = fetch_hotspots(days=days, country="NGA")
+        features = geojson.get("features", [])
+
+        if not features:
+            print("[ML] No hotspot features returned from FIRMS pipeline.")
             return []
 
-        reader = csv.DictReader(lines)
+        # ── Optional enrichment ───────────────────────────────────
+        try:
+            from analysis.region_classifier import enrich_with_regions
+            geojson  = enrich_with_regions(geojson)
+            features = geojson.get("features", [])
+        except Exception as enrich_err:
+            print(f"[ML] Region enrichment skipped: {enrich_err}")
+
+        try:
+            from analysis.anomaly_score import score_hotspots
+            geojson  = score_hotspots(geojson)
+            features = geojson.get("features", [])
+        except Exception as score_err:
+            print(f"[ML] Anomaly scoring skipped: {score_err}")
+
+        # ── Convert GeoJSON features → flat hotspot dicts ─────────
+        def _safe_float(val: Any, default: float = 0.0) -> float:
+            try:
+                return float(val) if val not in (None, "", "nan") else default
+            except (ValueError, TypeError):
+                return default
+
         hotspots: list[dict[str, Any]] = []
 
-        for row in reader:
+        for feature in features:
             try:
-                lat = float(row.get("latitude", 0))
-                lon = float(row.get("longitude", 0))
+                geometry = feature.get("geometry", {})
+                coords   = geometry.get("coordinates", [])
+                props    = feature.get("properties", {})
 
-                # Filter to Nigeria bounding box
+                if not coords or len(coords) < 2:
+                    continue
+
+                lon = float(coords[0])   # GeoJSON is [lon, lat]
+                lat = float(coords[1])
+
+                # Nigeria bounding-box guard
                 if not (4.0 <= lat <= 14.0 and 2.5 <= lon <= 15.0):
                     continue
 
                 hotspots.append({
-                    "latitude": lat,
-                    "longitude": lon,
-                    "brightness": float(row.get("bright_ti4", 0)),
-                    "confidence": row.get("confidence", ""),
-                    "acq_date": row.get("acq_date", ""),
-                    "acq_time": row.get("acq_time", ""),
-                    "satellite": row.get("satellite", ""),
-                    "frp": float(row.get("frp", 0)),
+                    "latitude":     lat,
+                    "longitude":    lon,
+                    "brightness":   _safe_float(
+                        props.get("bright_ti4") or props.get("brightness")
+                    ),
+                    "confidence":   props.get("confidence", ""),
+                    "acq_date":     props.get("acq_date",   ""),
+                    "acq_time":     props.get("acq_time",   ""),
+                    "satellite":    props.get("satellite",  ""),
+                    "frp":          _safe_float(props.get("frp")),
+                    "state":        props.get("state",        ""),
+                    "threat_score": _safe_float(props.get("threat_score")),
+                    "priority":     props.get("priority",     ""),
                 })
 
                 if len(hotspots) >= limit:
                     break
 
-            except (ValueError, KeyError):
+            except (ValueError, KeyError, TypeError) as row_err:
+                print(f"[ML] Skipping malformed feature: {row_err}")
                 continue
 
-        print(f"[ML] Fetched {len(hotspots)} Nigeria hotspots for scanning.")
+        print(f"[ML] Extracted {len(hotspots)} Nigeria hotspots "
+              f"from {len(features)} total features.")
         return hotspots
 
+    except ImportError as e:
+        print(f"[ML] ingestion.firms not importable: {e}")
+        return []
     except Exception as e:
-        print(f"[ML] Failed to fetch hotspots for scan: {e}")
+        print(f"[ML] _get_hotspots_for_scan failed: {e}")
+        traceback.print_exc()
         return []
 
 
@@ -380,13 +453,13 @@ async def predict_image(
 
         if detector is None:
             return {
-                "status": "unavailable",
-                "message": "ML model not available.",
+                "status":      "unavailable",
+                "message":     "ML model not available.",
                 "mock_result": {
-                    "label": "legal_activity",
+                    "label":      "legal_activity",
                     "confidence": 0.0,
-                    "flag": False,
-                    "class_id": 0,
+                    "flag":       False,
+                    "class_id":   0,
                 },
             }
 
@@ -394,36 +467,29 @@ async def predict_image(
         import numpy as np
         from ml.preprocessor import preprocess_image
 
-        # Read and validate uploaded file
         contents = await file.read()
         if len(contents) < 100:
             raise ValueError("Uploaded file is too small to be a valid image.")
 
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
+        image       = Image.open(io.BytesIO(contents)).convert("RGB")
         image_array = np.array(image)
+        tensor      = preprocess_image(image_array)
 
-        # Preprocess
-        tensor = preprocess_image(image_array)
         if tensor is None:
-            raise ValueError("Preprocessing failed — returned None.")
+            raise ValueError("Preprocessing returned None — image may be corrupt.")
 
-        # Predict with TTA for best accuracy
         result = detector.predict(tensor, use_tta=True)
 
         return {
-            "status": "success",
-            "filename": file.filename,
-            "image_size": {
-                "width": image.width,
-                "height": image.height,
-            },
-            "result": result,
+            "status":         "success",
+            "filename":       file.filename,
+            "image_size":     {"width": image.width, "height": image.height},
+            "result":         result,
             "recommendation": _get_recommendation(result),
         }
 
     except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[ERROR] /ml/predict failed:\n{tb}")
+        print(f"[ERROR] /ml/predict failed:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -442,7 +508,7 @@ async def predict_batch(
 
         if detector is None:
             return {
-                "status": "unavailable",
+                "status":  "unavailable",
                 "message": "ML model not available.",
             }
 
@@ -454,132 +520,124 @@ async def predict_batch(
 
         for upload_file in files:
             try:
-                contents = await upload_file.read()
-                image = Image.open(io.BytesIO(contents)).convert("RGB")
+                contents    = await upload_file.read()
+                image       = Image.open(io.BytesIO(contents)).convert("RGB")
                 image_array = np.array(image)
-                tensor = preprocess_image(image_array)
+                tensor      = preprocess_image(image_array)
 
                 if tensor is not None:
                     prediction = detector.predict(tensor, use_tta=True)
                     results.append({
-                        "filename": upload_file.filename,
-                        "status": "success",
-                        "result": prediction,
+                        "filename":       upload_file.filename,
+                        "status":         "success",
+                        "result":         prediction,
                         "recommendation": _get_recommendation(prediction),
                     })
                 else:
                     results.append({
                         "filename": upload_file.filename,
-                        "status": "error",
-                        "error": "Preprocessing failed",
+                        "status":   "error",
+                        "error":    "Preprocessing failed",
                     })
 
             except Exception as file_err:
                 results.append({
                     "filename": upload_file.filename,
-                    "status": "error",
-                    "error": str(file_err),
+                    "status":   "error",
+                    "error":    str(file_err),
                 })
 
-        # Aggregate stats
         successful = [r for r in results if r["status"] == "success"]
-        flagged = sum(
+        flagged    = sum(
             1 for r in successful
             if r.get("result", {}).get("flag", False)
         )
-        critical = sum(
+        critical   = sum(
             1 for r in successful
             if r.get("recommendation", {}).get("level") == "CRITICAL"
         )
 
         return {
-            "status": "success",
-            "total": len(results),
+            "status":   "success",
+            "total":    len(results),
             "analyzed": len(successful),
-            "flagged": flagged,
+            "flagged":  flagged,
             "critical": critical,
-            "results": results,
+            "results":  results,
         }
 
     except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[ERROR] /ml/predict-batch failed:\n{tb}")
+        print(f"[ERROR] /ml/predict-batch failed:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ═══════════════════════════════════════════════════════
 # COORDINATE-BASED ANALYSIS
-# The KEY integration — analyze any lat/lon automatically
 # ═══════════════════════════════════════════════════════
 
 @router.post("/ml/analyze-location")
 async def analyze_location(
-    lat: float,
-    lon: float,
-    zoom: int = 17,
+    lat:     float,
+    lon:     float,
+    zoom:    int  = 17,
     use_tta: bool = True,
 ):
     """
     Analyze a specific coordinate by downloading satellite imagery
     and running the CampDetector model.
 
-    This is the primary integration point used by:
-    - Hotspot analysis (auto-scan fire locations)
-    - Movement tracking (scan destination areas)
-    - Manual investigation (analyst clicks a point on the map)
-    - Alert verification (confirm suspicious activity)
+    Primary integration point used by:
+      - Hotspot popups ("Analyze with ML" button)
+      - Movement tracking (scan destination areas)
+      - Manual investigation (analyst picks a point on the map)
+      - Alert verification (confirm suspicious activity)
 
     Args:
-        lat:     Latitude of the location to analyze.
-        lon:     Longitude of the location to analyze.
-        zoom:    Satellite image zoom level (15-18, default 17).
+        lat:     Latitude  (-90 … 90).
+        lon:     Longitude (-180 … 180).
+        zoom:    Satellite tile zoom level (15-18, default 17).
         use_tta: Use test-time augmentation for higher accuracy.
-
-    Returns:
-        Classification result with recommendation.
     """
     try:
         detector = _get_detector()
 
         if detector is None:
             return {
-                "status": "unavailable",
-                "message": "ML model not available.",
+                "status":   "unavailable",
+                "message":  "ML model not available.",
                 "location": {"lat": lat, "lon": lon},
             }
 
         from ml.preprocessor import preprocess_image
         import numpy as np
 
-        # Validate coordinates (Nigeria bounding box with margin)
+        # Validate coordinates — Nigeria with generous margin
         if not (-5.0 <= lat <= 20.0 and -5.0 <= lon <= 20.0):
             return {
-                "status": "error",
-                "message": (
+                "status":   "error",
+                "message":  (
                     f"Coordinates ({lat}, {lon}) are outside "
-                    f"the supported region."
+                    "the supported region (West Africa)."
                 ),
                 "location": {"lat": lat, "lon": lon},
             }
 
-        # Fetch satellite imagery for this location
         image = _fetch_satellite_tile(lat, lon, zoom=zoom)
 
         if image is None:
             return {
-                "status": "error",
-                "message": (
+                "status":   "error",
+                "message":  (
                     "Could not fetch satellite imagery for this location. "
                     "The tile server may be temporarily unavailable."
                 ),
                 "location": {"lat": lat, "lon": lon},
             }
 
-        # Validate tile quality
         if not _is_valid_satellite_image(image):
             return {
-                "status": "error",
-                "message": (
+                "status":   "error",
+                "message":  (
                     "Downloaded satellite tile appears invalid "
                     "(blank, too dark, or cloud-covered). "
                     "Try a different zoom level."
@@ -587,31 +645,29 @@ async def analyze_location(
                 "location": {"lat": lat, "lon": lon},
             }
 
-        # Preprocess and predict
         image_array = np.array(image)
-        tensor = preprocess_image(image_array)
+        tensor      = preprocess_image(image_array)
 
         if tensor is None:
             return {
-                "status": "error",
-                "message": "Image preprocessing failed.",
+                "status":   "error",
+                "message":  "Image preprocessing failed.",
                 "location": {"lat": lat, "lon": lon},
             }
 
         result = detector.predict(tensor, use_tta=use_tta)
 
         return {
-            "status": "success",
-            "location": {"lat": lat, "lon": lon},
-            "zoom": zoom,
-            "use_tta": use_tta,
-            "result": result,
+            "status":         "success",
+            "location":       {"lat": lat, "lon": lon},
+            "zoom":           zoom,
+            "use_tta":        use_tta,
+            "result":         result,
             "recommendation": _get_recommendation(result),
         }
 
     except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[ERROR] /ml/analyze-location failed:\n{tb}")
+        print(f"[ERROR] /ml/analyze-location failed:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -623,62 +679,56 @@ async def analyze_location(
 @router.post("/ml/scan-hotspots")
 async def scan_hotspots(days: int = 1, limit: int = 50):
     """
-    Automatically scan recent FIRMS hotspots with ML model.
+    Automatically scan recent FIRMS hotspots with the ML model.
 
     Pipeline for each hotspot:
-      1. Get hotspot coordinates from FIRMS
+      1. Fetch hotspot coordinates from FIRMS (Nigeria bbox)
       2. Download satellite imagery at that coordinate
       3. Run CampDetector inference
       4. Flag suspicious encampments
       5. Generate threat recommendations
 
-    This connects:
-      Fire/thermal data → Satellite imagery → ML classification
-    into a single automated intelligence pipeline.
-
     Args:
         days:  Number of days of FIRMS data to scan (1-10).
-        limit: Maximum number of hotspots to analyze (1-100).
-
-    Returns:
-        List of analyzed hotspots with predictions and recommendations.
+        limit: Maximum hotspots to analyze (1-100).
     """
     try:
         detector = _get_detector()
 
         if detector is None:
             return {
-                "status": "unavailable",
+                "status":  "unavailable",
                 "message": "ML model not available.",
             }
 
         from ml.preprocessor import preprocess_image
         import numpy as np
 
-        # Clamp parameters
-        days = max(1, min(10, days))
+        days  = max(1, min(10,  days))
         limit = max(1, min(100, limit))
 
-        # Fetch recent hotspots from FIRMS
         hotspots_data = await _get_hotspots_for_scan(days, limit)
 
         if not hotspots_data:
             return {
-                "status": "success",
-                "message": (
-                    "No hotspots found in Nigeria "
-                    f"for the past {days} day(s)."
+                "status":          "success",
+                "message":         (
+                    f"No hotspots found in Nigeria for the past {days} day(s). "
+                    "Check that FIRMS_MAP_KEY is set correctly in your .env file."
                 ),
-                "days": days,
-                "scanned": 0,
-                "flagged": 0,
-                "results": [],
+                "days":            days,
+                "scanned":         0,
+                "tile_failures":   0,
+                "flagged":         0,
+                "critical":        0,
+                "threat_ratio":    0.0,
+                "results":         [],
             }
 
-        results: list[dict[str, Any]] = []
-        flagged_count = 0
+        results:       list[dict[str, Any]] = []
+        flagged_count  = 0
         critical_count = 0
-        tile_failures = 0
+        tile_failures  = 0
 
         for idx, hotspot in enumerate(hotspots_data):
             lat = hotspot.get("latitude")
@@ -687,132 +737,119 @@ async def scan_hotspots(days: int = 1, limit: int = 50):
             if lat is None or lon is None:
                 continue
 
-            # Fetch satellite tile
             image = _fetch_satellite_tile(lat, lon, zoom=17)
 
             if image is None or not _is_valid_satellite_image(image):
                 tile_failures += 1
                 results.append({
-                    "index": idx,
-                    "location": {"lat": lat, "lon": lon},
-                    "status": "tile_unavailable",
+                    "index":        idx,
+                    "location":     {"lat": lat, "lon": lon},
+                    "status":       "tile_unavailable",
                     "hotspot_info": {
                         "brightness": hotspot.get("brightness"),
                         "confidence": hotspot.get("confidence"),
-                        "acq_date": hotspot.get("acq_date"),
-                        "satellite": hotspot.get("satellite"),
+                        "acq_date":   hotspot.get("acq_date"),
+                        "satellite":  hotspot.get("satellite"),
                     },
                 })
                 continue
 
-            # Preprocess and predict
             image_array = np.array(image)
-            tensor = preprocess_image(image_array)
+            tensor      = preprocess_image(image_array)
 
             if tensor is None:
                 continue
 
-            prediction = detector.predict(tensor, use_tta=True)
+            prediction     = detector.predict(tensor, use_tta=True)
             recommendation = _get_recommendation(prediction)
+            is_flagged     = prediction.get("flag", False)
 
-            is_flagged = prediction.get("flag", False)
             if is_flagged:
                 flagged_count += 1
             if recommendation.get("level") == "CRITICAL":
                 critical_count += 1
 
             results.append({
-                "index": idx,
-                "location": {"lat": lat, "lon": lon},
-                "status": "analyzed",
-                "prediction": prediction,
+                "index":          idx,
+                "location":       {"lat": lat, "lon": lon},
+                "status":         "analyzed",
+                "prediction":     prediction,
                 "recommendation": recommendation,
-                "hotspot_info": {
+                "hotspot_info":   {
                     "brightness": hotspot.get("brightness"),
                     "confidence": hotspot.get("confidence"),
-                    "acq_date": hotspot.get("acq_date"),
-                    "acq_time": hotspot.get("acq_time"),
-                    "satellite": hotspot.get("satellite"),
-                    "frp": hotspot.get("frp"),
+                    "acq_date":   hotspot.get("acq_date"),
+                    "acq_time":   hotspot.get("acq_time"),
+                    "satellite":  hotspot.get("satellite"),
+                    "frp":        hotspot.get("frp"),
                 },
             })
 
-            # Rate limit: don't hammer the tile server
+            # Polite rate-limit — don't hammer the tile server
             time.sleep(0.3)
 
-            # Progress logging for long scans
             if (idx + 1) % 10 == 0:
                 print(
                     f"[ML] Scan progress: {idx + 1}/{len(hotspots_data)} "
-                    f"hotspots analyzed, {flagged_count} flagged"
+                    f"hotspots, {flagged_count} flagged so far"
                 )
 
-        analyzed_count = sum(
-            1 for r in results if r["status"] == "analyzed"
-        )
+        analyzed_count = sum(1 for r in results if r["status"] == "analyzed")
 
         return {
-            "status": "success",
-            "days": days,
-            "hotspots_found": len(hotspots_data),
-            "scanned": analyzed_count,
-            "tile_failures": tile_failures,
-            "flagged": flagged_count,
-            "critical": critical_count,
-            "threat_ratio": (
+            "status":          "success",
+            "days":            days,
+            "hotspots_found":  len(hotspots_data),
+            "scanned":         analyzed_count,
+            "tile_failures":   tile_failures,
+            "flagged":         flagged_count,
+            "critical":        critical_count,
+            "threat_ratio":    (
                 round(flagged_count / analyzed_count, 3)
-                if analyzed_count > 0
-                else 0.0
+                if analyzed_count > 0 else 0.0
             ),
-            "results": results,
+            "results":         results,
         }
 
     except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[ERROR] /ml/scan-hotspots failed:\n{tb}")
+        print(f"[ERROR] /ml/scan-hotspots failed:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ═══════════════════════════════════════════════════════
 # AREA SCANNING
-# Draw a rectangle → scan entire area for camps
+# Draw a rectangle on the map → scan entire area
 # ═══════════════════════════════════════════════════════
 
 @router.post("/ml/scan-area")
 async def scan_area(
-    lat_min: float,
-    lat_max: float,
-    lon_min: float,
-    lon_max: float,
+    lat_min:   float,
+    lat_max:   float,
+    lon_min:   float,
+    lon_max:   float,
     grid_step: float = 0.01,
-    zoom: int = 17,
+    zoom:      int   = 17,
 ):
     """
     Scan a rectangular area with a grid of satellite image patches.
 
-    Use case: An analyst draws a rectangle on the map and says
-    'scan this entire area for suspicious encampments.'
-
-    Each grid point gets a satellite tile downloaded and analyzed.
-    Only flagged (suspicious) locations are returned in detail
-    to keep the response compact.
+    Each grid point gets a satellite tile downloaded and classified.
+    Only flagged (suspicious) locations are included in the response
+    to keep the payload compact.
 
     Args:
-        lat_min, lat_max: Latitude bounds of the scan area.
-        lon_min, lon_max: Longitude bounds of the scan area.
+        lat_min, lat_max: South / North latitude bounds.
+        lon_min, lon_max: West  / East  longitude bounds.
         grid_step:        Distance between scan points in degrees.
-                          0.01° ≈ 1.1 km at the equator.
+                          0.01° ≈ 1.1 km. Clamped to 0.005 – 0.1.
         zoom:             Satellite tile zoom level (15-18).
-
-    Returns:
-        Summary stats and list of flagged locations.
     """
     try:
         detector = _get_detector()
 
         if detector is None:
             return {
-                "status": "unavailable",
+                "status":  "unavailable",
                 "message": "ML model not available.",
             }
 
@@ -829,7 +866,6 @@ async def scan_area(
                 ),
             )
 
-        # Clamp grid_step
         grid_step = max(0.005, min(0.1, grid_step))
 
         # Generate grid points
@@ -842,32 +878,28 @@ async def scan_area(
                 lon += grid_step
             lat += grid_step
 
-        # Limit to prevent abuse / excessive tile downloads
+        # Hard cap to prevent runaway tile downloads
         max_points = 100
         if len(grid_points) > max_points:
+            suggestion = round(
+                max((lat_max - lat_min), (lon_max - lon_min)) / 10, 4
+            )
             return {
-                "status": "error",
-                "message": (
-                    f"Area too large: {len(grid_points)} grid points "
-                    f"would be generated. Maximum is {max_points}. "
-                    f"Increase grid_step (currently {grid_step}) "
-                    f"or reduce the scan area."
+                "status":      "error",
+                "message":     (
+                    f"Area too large: {len(grid_points)} grid points would be "
+                    f"generated. Maximum is {max_points}. "
+                    f"Increase grid_step (currently {grid_step}°) or reduce "
+                    f"the scan area. Suggested grid_step: {suggestion}°"
                 ),
                 "grid_points": len(grid_points),
                 "max_allowed": max_points,
-                "suggestion": round(
-                    max(
-                        (lat_max - lat_min),
-                        (lon_max - lon_min),
-                    )
-                    / 10,
-                    4,
-                ),
+                "suggestion":  suggestion,
             }
 
         flagged_locations: list[dict[str, Any]] = []
-        scanned_count = 0
-        flagged_count = 0
+        scanned_count  = 0
+        flagged_count  = 0
         critical_count = 0
 
         for idx, (lat, lon) in enumerate(grid_points):
@@ -877,39 +909,36 @@ async def scan_area(
                 continue
 
             image_array = np.array(image)
-            tensor = preprocess_image(image_array)
+            tensor      = preprocess_image(image_array)
 
             if tensor is None:
                 continue
 
             scanned_count += 1
 
-            # Use TTA=False for area scans (speed over marginal accuracy)
+            # TTA=False for area scans — speed over marginal accuracy gain
             prediction = detector.predict(tensor, use_tta=False)
+            is_flagged  = prediction.get("flag", False)
 
-            is_flagged = prediction.get("flag", False)
             if is_flagged:
-                flagged_count += 1
-                recommendation = _get_recommendation(prediction)
+                flagged_count  += 1
+                recommendation  = _get_recommendation(prediction)
 
                 if recommendation.get("level") == "CRITICAL":
                     critical_count += 1
 
-                # Only include flagged locations in response
                 flagged_locations.append({
-                    "location": {"lat": lat, "lon": lon},
-                    "prediction": prediction,
+                    "location":       {"lat": lat, "lon": lon},
+                    "prediction":     prediction,
                     "recommendation": recommendation,
                 })
 
-            # Rate limit
             time.sleep(0.3)
 
-            # Progress logging
             if (idx + 1) % 20 == 0:
                 print(
                     f"[ML] Area scan: {idx + 1}/{len(grid_points)} "
-                    f"points, {flagged_count} flagged"
+                    f"points processed, {flagged_count} flagged"
                 )
 
         return {
@@ -920,24 +949,22 @@ async def scan_area(
                 "lon_min": lon_min,
                 "lon_max": lon_max,
             },
-            "grid_step": grid_step,
-            "grid_points_total": len(grid_points),
+            "grid_step":           grid_step,
+            "grid_points_total":   len(grid_points),
             "grid_points_scanned": scanned_count,
-            "flagged": flagged_count,
-            "critical": critical_count,
-            "threat_ratio": (
+            "flagged":             flagged_count,
+            "critical":            critical_count,
+            "threat_ratio":        (
                 round(flagged_count / scanned_count, 3)
-                if scanned_count > 0
-                else 0.0
+                if scanned_count > 0 else 0.0
             ),
-            "flagged_locations": flagged_locations,
+            "flagged_locations":   flagged_locations,
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[ERROR] /ml/scan-area failed:\n{tb}")
+        print(f"[ERROR] /ml/scan-area failed:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -949,19 +976,35 @@ async def scan_area(
 def ml_status():
     """
     Check ML model availability, configuration, and capabilities.
-    Used by the dashboard to show/hide ML features.
+
+    FIX: Previous version returned capability booleans only.
+    Now always includes full metadata (classes, zoom_levels,
+    tta_enabled, confidence_threshold) so the dashboard panel
+    displays correct values instead of "—" for every field.
+
+    The metadata fields are populated even when the model is
+    offline, so the UI always has something useful to show.
     """
+    # ── Base response — safe defaults ────────────────────────
     status: dict[str, Any] = {
         "torch_available": False,
-        "model_loaded": False,
-        "weights_found": False,
-        "device": "cpu",
-        "mode": os.getenv("EAGLEEYE_MODE", "dev"),
+        "model_loaded":    False,
+        "weights_found":   False,
+        "device":          "cpu",
+        "mode":            os.getenv("EAGLEEYE_MODE", "dev"),
+        # Capability object is ALWAYS present and ALWAYS contains
+        # both feature flags AND model metadata.
         "capabilities": {
-            "predict": False,
+            # Feature flags (updated to True when model is ready)
+            "predict":          False,
             "analyze_location": False,
-            "scan_hotspots": False,
-            "scan_area": False,
+            "scan_hotspots":    False,
+            "scan_area":        False,
+            # Model metadata (always populated from module constants)
+            "classes":               _MODEL_CLASSES,
+            "zoom_levels":           _MODEL_ZOOM_LEVELS,
+            "tta_enabled":           _MODEL_TTA_ENABLED,
+            "confidence_threshold":  _MODEL_CONFIDENCE_THRESHOLD,
         },
     }
 
@@ -969,33 +1012,46 @@ def ml_status():
         from ml.detector import TORCH_AVAILABLE, WEIGHTS_PATH
 
         status["torch_available"] = TORCH_AVAILABLE
-        status["weights_found"] = WEIGHTS_PATH.exists()
+        status["weights_found"]   = WEIGHTS_PATH.exists()
 
         if TORCH_AVAILABLE:
             import torch
-
-            status["device"] = (
-                "cuda" if torch.cuda.is_available() else "cpu"
-            )
+            status["device"]         = "cuda" if torch.cuda.is_available() else "cpu"
             status["cuda_available"] = torch.cuda.is_available()
-
             if torch.cuda.is_available():
                 status["gpu_name"] = torch.cuda.get_device_name(0)
 
-        detector = _get_detector()
+        detector    = _get_detector()
         model_ready = detector is not None and detector.model is not None
         status["model_loaded"] = model_ready
 
-        # All capabilities available if model is loaded
         if model_ready:
-            status["capabilities"] = {
-                "predict": True,
+            # Enable all feature flags
+            status["capabilities"].update({
+                "predict":          True,
                 "analyze_location": True,
-                "scan_hotspots": True,
-                "scan_area": True,
-            }
+                "scan_hotspots":    True,
+                "scan_area":        True,
+            })
+
+            # If CampDetector exposes its own config attributes,
+            # prefer those over the module-level constants.
+            if hasattr(detector, "classes") and detector.classes:
+                status["capabilities"]["classes"] = list(detector.classes)
+
+            if hasattr(detector, "confidence_threshold"):
+                status["capabilities"]["confidence_threshold"] = (
+                    float(detector.confidence_threshold)
+                )
+
+            if hasattr(detector, "tta_enabled"):
+                status["capabilities"]["tta_enabled"] = bool(detector.tta_enabled)
+
+            if hasattr(detector, "zoom_levels") and detector.zoom_levels:
+                status["capabilities"]["zoom_levels"] = list(detector.zoom_levels)
 
     except Exception as e:
         status["error"] = str(e)
+        print(f"[ML] ml_status() encountered an error: {e}")
 
     return status

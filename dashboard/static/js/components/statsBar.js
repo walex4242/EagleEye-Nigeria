@@ -127,12 +127,14 @@ const StatsBar = (() => {
           <button class="lbtn"        id="movement-toggle" title="Movement vectors (M)"          type="button">🧭 Move</button>
           <button class="lbtn"        id="panel-toggle"    title="Intelligence panel (I)"        type="button">📊 Intel</button>
           <button class="lbtn"        id="ml-toggle"       title="ML Analysis panel (X)"         type="button">🧠 ML</button>
+          <button class="lbtn"        id="predict-toggle"  title="Movement Prediction (P)"       type="button">◈ Predict</button>
         </div>
 
         <!-- Mobile buttons -->
         <div class="layer-btns show-mobile">
           <button class="lbtn" id="panel-toggle-mobile" type="button">📊 Intel</button>
           <button class="lbtn" id="ml-toggle-mobile"    type="button">🧠 ML</button>
+          <button class="lbtn" id="predict-toggle-mobile" type="button">◈ Predict</button>
         </div>
 
         <button class="refresh-btn" id="refresh-btn" type="button"
@@ -236,6 +238,22 @@ const StatsBar = (() => {
         MLView.togglePanel();
       } else {
         showToast('ML module not loaded', 'warning');
+      }
+    });
+
+    _bindBtn('predict-toggle', () => {
+      if (typeof PredictionView !== 'undefined') {
+        PredictionView.togglePanel();
+      } else {
+        showToast('Prediction module not loaded', 'warning');
+      }
+    });
+
+    _bindBtn('predict-toggle-mobile', () => {
+      if (typeof PredictionView !== 'undefined') {
+        PredictionView.togglePanel();
+      } else {
+        showToast('Prediction module not loaded', 'warning');
       }
     });
   }
@@ -513,6 +531,14 @@ const StatsBar = (() => {
     });
   }
 
+  function setPredictActive(isActive) {
+    const btn = el('predict-toggle');
+    const btnMob = el('predict-toggle-mobile');
+    [btn, btnMob].forEach((b) => {
+      if (b) b.classList.toggle('active', !!isActive);
+    });
+  }
+
   /* ══════════════════════════════════════
      Public: getDays()
      ══════════════════════════════════════ */
@@ -535,6 +561,7 @@ const StatsBar = (() => {
     filterByPriority,
     setRefreshing,
     setMLActive,
+    setPredictActive,
     getDays,
     getFilter,
   };

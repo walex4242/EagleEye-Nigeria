@@ -996,6 +996,21 @@ function buildHotspotPopup(f) {
         >
           🧠 Analyze with ML
         </button>
+
+         <button
+          onclick="if(typeof PredictionView!=='undefined') PredictionView.openPanel()"
+          style="margin-top:6px;width:100%;padding:8px;
+                 background:rgba(240,165,0,0.1);
+                 border:1px solid rgba(240,165,0,0.35);
+                 border-radius:5px;color:#f0a500;
+                 font-size:12px;font-weight:700;
+                 cursor:pointer;transition:background 0.15s"
+          onmouseover="this.style.background='rgba(240,165,0,0.25)'"
+          onmouseout="this.style.background='rgba(240,165,0,0.1)'"
+        >
+          ◈ Run Movement Prediction
+        </button>
+        
         <div style="margin-top:6px;text-align:center">
           <a href="/api/v1/hotspots/states?state=${encodeURIComponent(stateName)}" target="_blank"
              style="font-size:11px;color:#3b9eff;text-decoration:none">

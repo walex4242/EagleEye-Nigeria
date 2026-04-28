@@ -18,6 +18,8 @@ const PRECACHE_URLS = [
   '/static/js/components/statsBar.js',
   '/static/js/components/mapView.js',
   '/static/js/components/sidebar.js',
+  '/static/js/components/mlView.js',
+  '/static/js/components/predictionView.js',
   '/static/js/app.js',
 ];
 
